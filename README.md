@@ -6,6 +6,30 @@ Local inference solution for running Qwen3-Next-80B with Intel's 4-bit AutoRound
 
 This project provides a Python implementation for running the massive 80B parameter Qwen3-Next model on consumer GPUs using Intel's AutoRound quantization, reducing memory requirements from 160GB to ~29GB while maintaining model quality.
 
+## TL;DR Quick Start
+
+```bash
+# Clone and setup (Arch Linux example)
+git clone https://github.com/PieBru/Qwen3-NEXT-80B_AutoRound.git
+cd Qwen3-NEXT-80B_AutoRound
+
+# Install Python 3.13.3t (free-threaded) with pyenv
+pyenv install 3.13.3t
+pyenv local 3.13.3t
+
+# Create virtual environment
+uv venv
+source .venv/bin/activate
+
+# Install dependencies
+export UV_LINK_MODE=copy
+uv pip install -r requirements.txt --no-build-isolation -U
+
+# Authenticate and run
+hf auth login
+python run_qwen3_80b.py
+```
+
 ## Features
 
 - ✅ **4-bit Quantized Inference** - Run 80B models with ~29GB memory footprint
