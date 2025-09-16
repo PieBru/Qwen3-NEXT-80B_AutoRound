@@ -67,4 +67,4 @@
 
 ## Code Repository URL
 
-- **URL:** Local project (not yet published)
+- **URL:** https://github.com/PieBru/Qwen3-NEXT-80B_AutoRound
