@@ -102,6 +102,21 @@ python qwen3_80b.py --verbose
 python qwen3_80b.py --quiet
 ```
 
+### Alternative Loading Scripts
+
+For systems with limited GPU memory, we provide specialized scripts:
+
+```bash
+# CPU-only mode (no GPU required, 50GB+ RAM recommended)
+python run_qwen3_80b_cpu.py
+
+# Hybrid GPU/CPU mode (for GPUs with <24GB VRAM)
+python run_qwen3_80b_hybrid.py
+
+# Standard GPU mode (16GB+ VRAM)
+python run_qwen3_80b.py
+```
+
 The model uses special token 151668 (`</think>`) to separate internal reasoning from responses.
 
 ## Model Details
@@ -159,6 +174,13 @@ If the model appears stuck during loading:
 4. Verify model is cached: `python check_model.py`
 5. For CPU-only mode, ensure you have 64GB+ RAM available
 6. Use `export PYTHON_GIL=0` to avoid RuntimeWarnings with free-threaded Python
+
+### "b_q_weight is not on GPU" Error
+If you encounter `RuntimeError: b_q_weight is not on GPU`:
+- **Cause**: The quantization library expects all model weights on GPU, but your GPU doesn't have enough VRAM
+- **Solution 1**: Use CPU-only mode: `python run_qwen3_80b_cpu.py`
+- **Solution 2**: Use hybrid mode with proper offloading: `python run_qwen3_80b_hybrid.py`
+- **Explanation**: The 4-bit quantization post-processing requires either all weights on GPU or CPU, not mixed
 
 ### GPU Memory Warning (Limited VRAM)
 If you see: `Current model requires 28781064256 bytes of buffer for offloaded layers`
