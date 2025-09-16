@@ -31,17 +31,17 @@ export PYTHON_GIL=0
 # Authenticate with HuggingFace (required for model download)
 hf auth login
 
-# Run the unified inference script
-python run_qwen3_80b.py
+# Run the unified CLI
+python qwen3_80b.py
 
 # See all available options
-python run_qwen3_80b.py --help
+python qwen3_80b.py --help
 
-# Run with CPU-only mode
-python run_qwen3_80b.py --cpu
+# To see the model's thinking process:
+python qwen3_80b.py --thinking
 
-# Run with hybrid GPU/CPU mode
-python run_qwen3_80b.py --mode hybrid
+# Verify your environment is properly configured:
+python qwen3_80b.py --test-deps
 ```
 
 ## Features
@@ -64,66 +64,43 @@ python run_qwen3_80b.py --mode hybrid
 ### Quick Start
 
 ```bash
-# Interactive chat mode (auto-detect best configuration)
-python run_qwen3_80b.py
+# Interactive chat mode (default)
+python qwen3_80b.py
 
-# Force CPU-only mode
-python run_qwen3_80b.py --cpu
+# Show thinking/reasoning process
+python qwen3_80b.py --thinking
 
-# Force hybrid GPU/CPU mode
-python run_qwen3_80b.py --mode hybrid
+# Run performance benchmark
+python qwen3_80b.py --benchmark
 
-# Quiet mode with custom settings
-python run_qwen3_80b.py --quiet --temperature 0.9
+# Check if model is cached locally
+python qwen3_80b.py --check
+
+# Test dependencies
+python qwen3_80b.py --test-deps
 
 # Get help
-python run_qwen3_80b.py --help
+python qwen3_80b.py --help
 ```
 
 ### Advanced Usage
 
 ```bash
-# Auto-detect best mode (default)
-python run_qwen3_80b.py
+# Custom memory limits (in GiB)
+python qwen3_80b.py --gpu-memory 12 --cpu-memory 80
 
-# Force CPU-only mode (50GB+ RAM recommended)
-python run_qwen3_80b.py --cpu
-
-# Force hybrid GPU/CPU mode
-python run_qwen3_80b.py --mode hybrid
-
-# Force GPU-only mode (requires 40GB+ VRAM)
-python run_qwen3_80b.py --mode gpu
-
-# Custom memory limits (in GB)
-python run_qwen3_80b.py --gpu-memory 12 --cpu-memory 80
+# CPU-only mode (no GPU)
+python qwen3_80b.py --cpu
 
 # Custom generation parameters
-python run_qwen3_80b.py --temperature 0.9 --max-tokens 200
+python qwen3_80b.py --temperature 0.9 --max-tokens 200
 
 # Verbose mode with detailed information
-python run_qwen3_80b.py --verbose
+python qwen3_80b.py --verbose
 
 # Quiet mode (minimal output)
-python run_qwen3_80b.py --quiet
-
-# Skip test generation and go straight to chat
-python run_qwen3_80b.py --skip-test
-
-# Run test only without interactive chat
-python run_qwen3_80b.py --no-interactive
+python qwen3_80b.py --quiet
 ```
-
-### Memory Mode Selection
-
-The unified `run_qwen3_80b.py` script automatically selects the best mode based on your hardware:
-
-| Mode | Usage | Requirements |
-|------|-------|-------------|
-| **auto** (default) | Automatically detects best configuration | Any system |
-| **cpu** | CPU-only inference | 50GB+ RAM |
-| **gpu** | GPU-only inference | 40GB+ VRAM |
-| **hybrid** | Mixed GPU/CPU inference | 16GB+ VRAM, 30GB+ RAM |
 
 The model uses special token 151668 (`</think>`) to separate internal reasoning from responses.
 
@@ -186,8 +163,7 @@ If the model appears stuck during loading:
 ### "b_q_weight is not on GPU" Error
 If you encounter `RuntimeError: b_q_weight is not on GPU`:
 - **Cause**: The quantization library expects all model weights on GPU, but your GPU doesn't have enough VRAM
-- **Solution 1**: Use CPU-only mode: `python run_qwen3_80b.py --cpu`
-- **Solution 2**: Use hybrid mode with proper offloading: `python run_qwen3_80b.py --mode hybrid`
+- **Solution**: Use CPU-only mode: `python qwen3_80b.py --cpu`
 - **Explanation**: The 4-bit quantization post-processing requires either all weights on GPU or CPU, not mixed
 
 ### GPU Memory Warning (Limited VRAM)
@@ -219,7 +195,7 @@ This warning from the `accelerate` library means your GPU doesn't have enough VR
 
 **For 16GB VRAM GPUs:**
 ```bash
-python run_qwen3_80b.py --mode hybrid  # Automatically configures offload_buffers=True
+python qwen3_80b.py  # Automatically configures offload_buffers=True when needed
 ```
 
 This automatically distributes the model:
