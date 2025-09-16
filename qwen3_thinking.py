@@ -20,7 +20,8 @@ tokenizer = AutoTokenizer.from_pretrained(model_name)
 print("✓ Tokenizer loaded")
 
 print("\nLoading model (this will take several minutes)...")
-print("Note: The model is ~29GB in 4-bit quantization")
+print("Note: The model is ~58GB in 4-bit quantization")
+print("Device mapping is slow on first run, faster on subsequent runs")
 
 model = AutoModelForCausalLM.from_pretrained(
     model_name,

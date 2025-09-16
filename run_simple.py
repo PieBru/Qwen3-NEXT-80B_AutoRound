@@ -37,8 +37,9 @@ def main():
 
     # Load model with simplified settings
     print("\n3. Loading model (this WILL take time on first run)...")
-    print("   Model is 80GB - be patient!")
+    print("   Model is ~58GB - be patient!")
     print("   Using 4-bit quantization...")
+    print("   Device mapping is slow but faster on subsequent runs")
     start_time = time.time()
 
     try:

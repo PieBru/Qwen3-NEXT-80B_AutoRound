@@ -23,7 +23,7 @@ def main():
     # Load model with memory constraints
     print("\n2. Loading model (this may take several minutes)...")
     print("   Note: Using 4-bit quantization for memory efficiency")
-    print("   Model size: ~50GB - downloading if not cached...")
+    print("   Model size: ~58GB - downloading if not cached...")
     print("   Cache location: ~/.cache/huggingface/hub/")
     start_time = time.time()
 
@@ -40,6 +40,7 @@ def main():
 
         print("   Starting model load - this is SLOW for 80B model!")
         print("   The model has 80B parameters - device mapping takes time...")
+        print("   (This step is faster on subsequent runs)")
 
         model = AutoModelForCausalLM.from_pretrained(
             model_name,

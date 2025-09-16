@@ -4,7 +4,7 @@ Local inference solution for running Qwen3-Next-80B with Intel's 4-bit AutoRound
 
 ## Overview
 
-This project provides a Python implementation for running the Qwen3-Next 80B parameter model on consumer computers using Intel's AutoRound quantization, reducing memory requirements from 160GB to less than 64GB RAM when running on CPU only, while maintaining some model quality.
+This project provides a Python implementation for running the Qwen3-Next 80B parameter model on consumer computers using Intel's AutoRound quantization, reducing memory requirements from 160GB to ~58GB, enabling deployment on systems with 64GB RAM (CPU-only) or GPUs with 16GB+ VRAM.
 
 ## TL;DR Quick Start
 
@@ -50,7 +50,7 @@ python test_deps.py
 ## Requirements
 
 - Python 3.13+ (free-threaded build recommended, use `export PYTHON_GIL=0`)
-- ~50GB free disk space for model
+- ~64GB free disk space for model (actual size: ~58GB)
 - OPTIONAL:
   - NVIDIA GPU with 16GB+ VRAM, CUDA 12.1+
 
@@ -83,7 +83,7 @@ The model uses special token 151668 (`</think>`) to separate internal reasoning 
 ## Model Details
 
 - **Model**: Intel/Qwen3-Next-80B-A3B-Thinking-int4-mixed-AutoRound
-- **Size**: ~50GB (4-bit quantized with INT4/FP8 mixed precision)
+- **Size**: ~58GB (4-bit quantized with INT4/FP8 mixed precision)
 - **Original Size**: ~160GB (BF16 unquantized)
 - **Quantization**: Intel AutoRound v0.5 with SmoothQuant optimization
 - **Special Features**: Thinking tokens (151668 for `</think>`) for chain-of-thought reasoning
@@ -93,9 +93,9 @@ The model uses special token 151668 (`</think>`) to separate internal reasoning 
 ## Performance
 
 **⚠️ IMPORTANT: First load is VERY slow!**
-- The model is 80GB and device mapping for 80B parameters takes significant time
+- The model is ~58GB and device mapping for 80B parameters takes significant time
 - Initial load can take 5-15 minutes depending on hardware
-- Subsequent loads are faster due to caching
+- Subsequent loads are faster due to caching and pre-computed device maps
 
 Expected performance (once loaded):
 - **CPU-only**: 0.1-0.5 tokens/second (64GB+ RAM required)
@@ -104,20 +104,34 @@ Expected performance (once loaded):
 ## Troubleshooting
 
 If the model appears stuck during loading:
-1. **BE PATIENT** - The 80B model device mapping is extremely slow
+1. **BE PATIENT** - The 80B parameter model device mapping is extremely slow on first run
 2. Check system resources: `htop` (CPU/RAM) or `nvidia-smi` (GPU)
-3. Try the simplified loader: `python run_simple.py`
-4. For CPU-only mode, ensure you have 64GB+ RAM available
+3. Try the simplified loader: `python run_simple.py` (better progress feedback)
+4. Verify model is cached: `python check_model.py`
+5. For CPU-only mode, ensure you have 64GB+ RAM available
+6. Use `export PYTHON_GIL=0` to avoid RuntimeWarnings with free-threaded Python
 
-## Roadmap
+## Project Status
 
-- [x] Basic inference script
-- [x] Chain-of-thought support
-- [x] Interactive chat mode
-- [ ] OpenAI-compatible API server
-- [ ] Performance benchmarking suite
-- [ ] Docker containerization
-- [ ] Unit tests
+### ✅ Completed Features
+- Basic inference script with hardware detection
+- Chain-of-thought support (thinking token parsing)
+- Interactive chat mode
+- Official HuggingFace implementation
+- Model caching and verification tools
+- Multiple loading scripts for different use cases
+
+### 🚧 In Progress
+- Performance optimization for faster loading
+- Memory usage optimization
+
+### 📋 Planned Features
+- OpenAI-compatible API server (FastAPI)
+- Performance benchmarking suite
+- Docker containerization
+- Comprehensive unit tests
+- Batch inference support
+- Web UI interface
 
 ## Note
 
