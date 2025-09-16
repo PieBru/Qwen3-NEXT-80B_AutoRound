@@ -61,9 +61,10 @@ python test_deps.py
 1. **`run_official.py`** - Official HuggingFace implementation with thinking tokens
 2. **`qwen3_thinking.py`** - Alternative implementation with thinking visualization
 3. **`run_qwen3_80b.py`** - Basic inference with hardware detection
-4. **`run_simple.py`** - Simplified loader with better progress feedback
-5. **`check_model.py`** - Verify model cache status
-6. **`test_deps.py`** - Check dependencies
+4. **`run_optimized.py`** - Optimized for limited VRAM (16GB) + high RAM (100GB+)
+5. **`run_simple.py`** - Simplified loader with better progress feedback
+6. **`check_model.py`** - Verify model cache status
+7. **`test_deps.py`** - Check dependencies
 
 ### Running the Model
 
@@ -103,6 +104,7 @@ Expected performance (once loaded):
 
 ## Troubleshooting
 
+### Model Loading Issues
 If the model appears stuck during loading:
 1. **BE PATIENT** - The 80B parameter model device mapping is extremely slow on first run
 2. Check system resources: `htop` (CPU/RAM) or `nvidia-smi` (GPU)
@@ -110,6 +112,18 @@ If the model appears stuck during loading:
 4. Verify model is cached: `python check_model.py`
 5. For CPU-only mode, ensure you have 64GB+ RAM available
 6. Use `export PYTHON_GIL=0` to avoid RuntimeWarnings with free-threaded Python
+
+### GPU Memory Warning (Limited VRAM)
+If you see: `Current model requires 28781064256 bytes of buffer for offloaded layers`
+
+This means your GPU doesn't have enough VRAM (~28GB needed) for all model layers. **This is normal for GPUs with <24GB VRAM.**
+
+**Solution for RTX 4090 laptop (16GB VRAM) + high RAM:**
+```bash
+python run_optimized.py  # Optimized for 16GB VRAM + 100GB+ RAM
+```
+
+This script uses CPU+GPU offloading to distribute the model across both GPU and system RAM, preventing OOM errors while maintaining reasonable performance.
 
 ## Project Status
 

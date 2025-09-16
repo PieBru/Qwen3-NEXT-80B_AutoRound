@@ -31,8 +31,17 @@ def main():
         # Check if CUDA is available
         if torch.cuda.is_available():
             print(f"   GPU detected: {torch.cuda.get_device_name(0)}")
-            device_map = "auto"
-            max_memory = {0: "14GiB"}  # Leave some GPU memory for inference
+            gpu_memory = torch.cuda.get_device_properties(0).total_memory / 1024**3
+            print(f"   GPU VRAM: {gpu_memory:.1f} GB")
+
+            # For GPUs with limited VRAM, use conservative settings
+            if gpu_memory < 24:
+                print("   Limited VRAM detected - will use CPU+GPU offloading")
+                device_map = "auto"
+                max_memory = {0: "12GiB", "cpu": "100GiB"}  # Use both GPU and CPU RAM
+            else:
+                device_map = "auto"
+                max_memory = {0: "20GiB"}  # More generous for larger GPUs
         else:
             print("   No GPU detected - will use CPU (slower but works)")
             device_map = "cpu"
