@@ -42,6 +42,7 @@ def main():
     print("\n3. Loading model with CPU+GPU offloading...")
     print("   Model size: ~58GB")
     print("   Will use: ~12GB GPU + ~46GB CPU RAM")
+    print("   Total memory needed: <64GB")
     print("   This configuration avoids OOM errors")
     start_time = time.time()
 
@@ -52,7 +53,7 @@ def main():
             device_map="auto",
             max_memory={
                 0: "12GiB",  # Conservative GPU usage to avoid OOM
-                "cpu": "100GiB"  # Plenty of CPU RAM available
+                "cpu": "60GiB"  # Model needs ~46GB after GPU portion
             },
             dtype=torch.float16,
             trust_remote_code=True,
@@ -147,7 +148,7 @@ def main():
     except torch.cuda.OutOfMemoryError:
         print("\n✗ GPU Out of Memory!")
         print("\nTry reducing max_memory GPU allocation:")
-        print("  max_memory={0: '10GiB', 'cpu': '100GiB'}")
+        print("  max_memory={0: '10GiB', 'cpu': '60GiB'}")
         return 1
     except Exception as e:
         print(f"\n✗ Error: {e}")

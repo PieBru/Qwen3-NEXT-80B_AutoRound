@@ -38,7 +38,7 @@ def main():
             if gpu_memory < 24:
                 print("   Limited VRAM detected - will use CPU+GPU offloading")
                 device_map = "auto"
-                max_memory = {0: "12GiB", "cpu": "100GiB"}  # Use both GPU and CPU RAM
+                max_memory = {0: "12GiB", "cpu": "60GiB"}  # ~58GB model needs <64GB RAM
             else:
                 device_map = "auto"
                 max_memory = {0: "20GiB"}  # More generous for larger GPUs

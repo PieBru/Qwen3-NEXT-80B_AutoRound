@@ -61,7 +61,7 @@ python test_deps.py
 1. **`run_official.py`** - Official HuggingFace implementation with thinking tokens
 2. **`qwen3_thinking.py`** - Alternative implementation with thinking visualization
 3. **`run_qwen3_80b.py`** - Basic inference with hardware detection
-4. **`run_optimized.py`** - Optimized for limited VRAM (16GB) + high RAM (100GB+)
+4. **`run_optimized.py`** - Optimized for limited VRAM (16GB) + 64GB+ RAM
 5. **`run_simple.py`** - Simplified loader with better progress feedback
 6. **`check_model.py`** - Verify model cache status
 7. **`test_deps.py`** - Check dependencies
@@ -120,10 +120,15 @@ This means your GPU doesn't have enough VRAM (~28GB needed) for all model layers
 
 **Solution for RTX 4090 laptop (16GB VRAM) + high RAM:**
 ```bash
-python run_optimized.py  # Optimized for 16GB VRAM + 100GB+ RAM
+python run_optimized.py  # Optimized for 16GB VRAM + 64GB+ RAM
 ```
 
-This script uses CPU+GPU offloading to distribute the model across both GPU and system RAM, preventing OOM errors while maintaining reasonable performance.
+This script uses CPU+GPU offloading to distribute the model:
+- **GPU**: ~12GB (fast layers)
+- **CPU RAM**: ~46GB (remaining layers)
+- **Total**: <64GB memory usage
+
+This prevents OOM errors while maintaining reasonable performance.
 
 ## Project Status
 
