@@ -1,0 +1,20 @@
+# Core dependencies
+torch
+torchvision
+torchaudio
+accelerate
+huggingface_hub
+logbar
+
+# Transformers - need latest from source for qwen3_next support
+git+https://github.com/huggingface/transformers.git
+
+# Optimization libraries
+causal-conv1d
+flash-linear-attention
+
+# NumPy - use pre-built wheel to avoid compilation issues
+numpy
+
+# Quantization support
+gptqmodel>=2.0
