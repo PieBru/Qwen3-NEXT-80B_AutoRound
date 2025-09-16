@@ -28,15 +28,20 @@ uv pip install -r requirements.txt --no-build-isolation -U
 # Disable GIL for free-threaded Python
 export PYTHON_GIL=0
 
-# Authenticate and run
+# Authenticate with HuggingFace (required for model download)
 hf auth login
-python run_qwen3_80b.py
+
+# Run the unified CLI
+python qwen3_80b.py
+
+# See all available options
+python qwen3_80b.py --help
 
 # To see the model's thinking process:
-python qwen3_thinking.py    # Chain-of-Thought Mode
+python qwen3_80b.py --thinking
 
 # Verify your environment is properly configured:
-python test_deps.py
+python qwen3_80b.py --test-deps
 ```
 
 ## Features
@@ -56,27 +61,45 @@ python test_deps.py
 
 ## Usage
 
-### Available Scripts
-
-1. **`run_official.py`** - Official HuggingFace implementation with thinking tokens
-2. **`qwen3_thinking.py`** - Alternative implementation with thinking visualization
-3. **`run_qwen3_80b.py`** - Basic inference with hardware detection
-4. **`run_optimized.py`** - Optimized for limited VRAM (16GB) + 64GB+ RAM
-5. **`run_simple.py`** - Simplified loader with better progress feedback
-6. **`check_model.py`** - Verify model cache status
-7. **`test_deps.py`** - Check dependencies
-
-### Running the Model
+### Quick Start
 
 ```bash
-# Official implementation (recommended)
-python run_official.py
+# Interactive chat mode (default)
+python qwen3_80b.py
 
-# See the model's thinking process
-python qwen3_thinking.py
+# Show thinking/reasoning process
+python qwen3_80b.py --thinking
 
-# Basic interactive chat
-python run_qwen3_80b.py
+# Run performance benchmark
+python qwen3_80b.py --benchmark
+
+# Check if model is cached locally
+python qwen3_80b.py --check
+
+# Test dependencies
+python qwen3_80b.py --test-deps
+
+# Get help
+python qwen3_80b.py --help
+```
+
+### Advanced Usage
+
+```bash
+# Custom memory limits (in GiB)
+python qwen3_80b.py --gpu-memory 12 --cpu-memory 80
+
+# CPU-only mode (no GPU)
+python qwen3_80b.py --cpu
+
+# Custom generation parameters
+python qwen3_80b.py --temperature 0.9 --max-tokens 200
+
+# Verbose mode with detailed information
+python qwen3_80b.py --verbose
+
+# Quiet mode (minimal output)
+python qwen3_80b.py --quiet
 ```
 
 The model uses special token 151668 (`</think>`) to separate internal reasoning from responses.
@@ -84,7 +107,8 @@ The model uses special token 151668 (`</think>`) to separate internal reasoning 
 ## Model Details
 
 - **Model**: Intel/Qwen3-Next-80B-A3B-Thinking-int4-mixed-AutoRound
-- **Size**: ~58GB (4-bit quantized with INT4/FP8 mixed precision)
+- **Size**: ~41GB on disk (9 shards of ~4.7GB each)
+- **Memory Required**: ~58GB when loaded (4-bit quantized with INT4/FP8 mixed precision)
 - **Original Size**: ~160GB (BF16 unquantized)
 - **Quantization**: Intel AutoRound v0.5 with SmoothQuant optimization
 - **Special Features**: Thinking tokens (151668 for `</think>`) for chain-of-thought reasoning
@@ -102,6 +126,29 @@ Expected performance (once loaded):
 - **CPU-only**: 0.1-0.5 tokens/second (64GB+ RAM required)
 - **RTX 4090**: 2-5 tokens/second (uses 14-20GB VRAM + system RAM)
 
+### Understanding "Loading checkpoint shards"
+
+The "Loading checkpoint shards" message refers to **loading the model from disk into RAM**, not downloading. Each shard is being:
+
+1. **Read from disk** (your local cache at `~/.cache/huggingface/hub/`)
+2. **Loaded into RAM** (system memory)
+3. **Quantized/dequantized** on-the-fly (4-bit weights need processing)
+4. **Mapped to GPU/CPU** based on the device_map
+
+The slow speed (~2.5 minutes per shard) is due to:
+- **Single-threaded loading** - The transformers library's safetensors loader only uses 1 CPU thread
+- **On-the-fly quantization** - 4-bit AutoRound weights are being processed during loading
+- **Memory mapping** - 80B parameters being distributed across GPU and CPU memory
+- **Sequential processing** - Each shard must be loaded and processed in order
+
+This is normal for such a large quantized model. The 9 shards totaling 41GB will take ~20-25 minutes to fully load. You can monitor:
+- **CPU usage** with `htop` - only 1 thread at 100% (this is the limitation)
+- **RAM usage** with `htop` - should gradually increase to ~58GB
+- **Disk I/O** with `iotop` - intermittent reads as shards load
+- **Network** with `nethogs` - should be zero (using local files)
+
+The loading is slow but working correctly - it's a combination of the single-threaded loader and the complexity of loading 80 billion quantized parameters!
+
 ## Troubleshooting
 
 ### Model Loading Issues
@@ -116,19 +163,41 @@ If the model appears stuck during loading:
 ### GPU Memory Warning (Limited VRAM)
 If you see: `Current model requires 28781064256 bytes of buffer for offloaded layers`
 
-This means your GPU doesn't have enough VRAM (~28GB needed) for all model layers. **This is normal for GPUs with <24GB VRAM.**
+This warning from the `accelerate` library means your GPU doesn't have enough VRAM (~28GB needed) for all model layers. **This is normal and expected for GPUs with <24GB VRAM.**
 
-**Solution for RTX 4090 laptop (16GB VRAM) + high RAM:**
+**Important:** We're already using `offload_buffers=True` in all scripts! The warning appears because `accelerate` checks memory **before** knowing we have this flag enabled.
+
+#### Understanding `offload_buffers=True`
+
+**What it does:**
+- **Enables**: Temporary buffers used during computation to be offloaded to CPU RAM
+- **Purpose**: Prevents GPU OOM errors when model layers need more VRAM than available
+- **How it works**: Moves intermediate computation buffers between GPU↔CPU as needed
+
+**Trade-offs of using `offload_buffers=True`:**
+
+| Aspect | Impact | Explanation |
+|--------|--------|-------------|
+| **Inference Speed** | Slower | Extra CPU↔GPU transfers for buffers |
+| **CPU RAM Usage** | Higher | Buffers need space in system memory |
+| **PCIe Bandwidth** | High usage | Constant data movement between GPU and CPU |
+| **Latency** | Increased | Each layer computation may wait for buffer transfers |
+
+**Comparison:**
+- **Without it**: You'd get OOM errors immediately when the model tries to allocate 28GB of buffers on a 16GB GPU
+- **With it**: The model runs successfully but slower - this is the **only way** to run an 80B model on consumer GPUs with <24GB VRAM
+
+**For 16GB VRAM GPUs:**
 ```bash
-python run_optimized.py  # Optimized for 16GB VRAM + 64GB+ RAM
+python run_qwen3_80b_realistic.py  # Already configured with offload_buffers=True
 ```
 
-This script uses CPU+GPU offloading to distribute the model:
-- **GPU**: ~12GB (fast layers)
-- **CPU RAM**: ~46GB (remaining layers)
-- **Total**: <64GB memory usage
+This automatically distributes the model:
+- **GPU**: ~14GB (performance-critical layers)
+- **CPU RAM**: ~44GB (remaining layers + buffers)
+- **Total**: ~58GB memory usage
 
-This prevents OOM errors while maintaining reasonable performance.
+**Bottom line:** The warning is misleading - it appears before the library knows we're using `offload_buffers=True`. The model works correctly despite the warning.
 
 ## Project Status
 
@@ -168,4 +237,4 @@ MIT License - See LICENSE file for details
 
 - [Intel for the AutoRound quantized model](https://huggingface.co/Intel/Qwen3-Next-80B-A3B-Thinking-int4-mixed-AutoRound)
 - Hugging Face for hosting the model
-- The localllama community for inspiration and feedback
+- [The LocalLLaMA community](https://www.reddit.com/r/LocalLLaMA/) for inspiration and feedback
