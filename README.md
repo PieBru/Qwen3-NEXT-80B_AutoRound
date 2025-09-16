@@ -54,13 +54,41 @@ python test_deps.py
 - OPTIONAL:
   - NVIDIA GPU with 16GB+ VRAM, CUDA 12.1+
 
+## Usage
+
+### Available Scripts
+
+1. **`run_official.py`** - Official HuggingFace implementation with thinking tokens
+2. **`qwen3_thinking.py`** - Alternative implementation with thinking visualization
+3. **`run_qwen3_80b.py`** - Basic inference with hardware detection
+4. **`run_simple.py`** - Simplified loader with better progress feedback
+5. **`check_model.py`** - Verify model cache status
+6. **`test_deps.py`** - Check dependencies
+
+### Running the Model
+
+```bash
+# Official implementation (recommended)
+python run_official.py
+
+# See the model's thinking process
+python qwen3_thinking.py
+
+# Basic interactive chat
+python run_qwen3_80b.py
+```
+
+The model uses special token 151668 (`</think>`) to separate internal reasoning from responses.
+
 ## Model Details
 
 - **Model**: Intel/Qwen3-Next-80B-A3B-Thinking-int4-mixed-AutoRound
-- **Size**: ~50GB (4-bit quantized)
-- **Original Size**: ~160GB (unquantized)
-- **Quantization**: Intel AutoRound 4-bit mixed precision
-- **Special Features**: Thinking tokens for chain-of-thought reasoning
+- **Size**: ~50GB (4-bit quantized with INT4/FP8 mixed precision)
+- **Original Size**: ~160GB (BF16 unquantized)
+- **Quantization**: Intel AutoRound v0.5 with SmoothQuant optimization
+- **Special Features**: Thinking tokens (151668 for `</think>`) for chain-of-thought reasoning
+- **Context Length**: Supports full context as per original model
+- **Calibration**: 256 samples, 2048 sequence length, 2/256 learning rate
 
 ## Performance
 
