@@ -23,15 +23,31 @@ def main():
     # Load model with memory constraints
     print("\n2. Loading model (this may take several minutes)...")
     print("   Note: Using 4-bit quantization for memory efficiency")
+    print("   Model size: ~50GB - downloading if not cached...")
+    print("   Cache location: ~/.cache/huggingface/hub/")
     start_time = time.time()
 
     try:
+        # Check if CUDA is available
+        if torch.cuda.is_available():
+            print(f"   GPU detected: {torch.cuda.get_device_name(0)}")
+            device_map = "auto"
+            max_memory = {0: "14GiB"}  # Leave some GPU memory for inference
+        else:
+            print("   No GPU detected - will use CPU (slower but works)")
+            device_map = "cpu"
+            max_memory = None
+
+        print("   Starting model load - this is SLOW for 80B model!")
+        print("   The model has 80B parameters - device mapping takes time...")
+
         model = AutoModelForCausalLM.from_pretrained(
             model_name,
-            dtype=torch.float16,  # Changed from torch_dtype to dtype
-            device_map="auto",
-            max_memory={0: "14GiB"},  # Leave some GPU memory for inference
-            trust_remote_code=True
+            torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
+            device_map=device_map,
+            max_memory=max_memory,
+            trust_remote_code=True,
+            low_cpu_mem_usage=True
         )
         print(f"   ✓ Model loaded in {time.time() - start_time:.2f}s")
 

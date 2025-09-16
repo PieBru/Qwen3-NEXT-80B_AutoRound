@@ -62,12 +62,24 @@ python test_deps.py
 - **Quantization**: Intel AutoRound 4-bit mixed precision
 - **Special Features**: Thinking tokens for chain-of-thought reasoning
 
-## Performance FIXME: to be defined
+## Performance
 
-On RTX 4090 (24GB VRAM):
-- Loading time: 2-3 minutes
-- Token generation: ~2-5 tokens/second
-- Memory usage: 14-20GB GPU + system RAM for overflow
+**⚠️ IMPORTANT: First load is VERY slow!**
+- The model is 80GB and device mapping for 80B parameters takes significant time
+- Initial load can take 5-15 minutes depending on hardware
+- Subsequent loads are faster due to caching
+
+Expected performance (once loaded):
+- **CPU-only**: 0.1-0.5 tokens/second (64GB+ RAM required)
+- **RTX 4090**: 2-5 tokens/second (uses 14-20GB VRAM + system RAM)
+
+## Troubleshooting
+
+If the model appears stuck during loading:
+1. **BE PATIENT** - The 80B model device mapping is extremely slow
+2. Check system resources: `htop` (CPU/RAM) or `nvidia-smi` (GPU)
+3. Try the simplified loader: `python run_simple.py`
+4. For CPU-only mode, ensure you have 64GB+ RAM available
 
 ## Roadmap
 
