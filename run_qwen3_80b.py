@@ -74,7 +74,7 @@ def estimate_layer_distribution(model_size_gb=40, vram_gb=14, layer_count=80):
     vram_bytes = vram_gb * 1024**3
 
     # Reserve some VRAM for operations
-    usable_vram = vram_bytes * 0.9
+    usable_vram = vram_bytes * 0.85
     layers_in_gpu = int(usable_vram / bytes_per_layer)
 
     return min(layers_in_gpu, layer_count)
@@ -113,14 +113,14 @@ def configure_device_map(args):
 
     if mode == "gpu":
         # Try to fit entire model on GPU
-        gpu_memory = args.gpu_memory if args.gpu_memory else int(vram_free * 0.9)
+        gpu_memory = args.gpu_memory if args.gpu_memory else int(vram_free * 0.85)
         if not args.quiet:
             print(f"   GPU allocation: {gpu_memory}GB")
         return "auto", {0: f"{gpu_memory}GiB"}, torch.float16
 
     elif mode == "hybrid":
         # Distribute between GPU and CPU
-        gpu_memory = args.gpu_memory if args.gpu_memory else min(14, int(vram_free * 0.9))
+        gpu_memory = args.gpu_memory if args.gpu_memory else min(14, int(vram_free * 0.85))
         cpu_memory = args.cpu_memory if args.cpu_memory else int(ram_available * 0.8)
 
         layers_on_gpu = estimate_layer_distribution(vram_gb=gpu_memory)
@@ -350,9 +350,9 @@ Examples:
 
     # Memory configuration
     parser.add_argument("--gpu-memory", type=int, metavar="GB",
-                        help="GPU memory limit in GB (default: auto)")
+                        help="GPU memory limit in GB (default: 85%% of available)")
     parser.add_argument("--cpu-memory", type=int, metavar="GB",
-                        help="CPU memory limit in GB (default: auto)")
+                        help="CPU memory limit in GB (default: 80%% of available)")
 
     # Generation parameters
     parser.add_argument("--temperature", type=float, default=0.7,
