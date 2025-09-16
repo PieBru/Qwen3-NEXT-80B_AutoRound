@@ -166,6 +166,6 @@ MIT License - See LICENSE file for details
 
 ## Acknowledgments
 
-- Intel for the AutoRound quantization technology
+- [Intel for the AutoRound quantized model](https://huggingface.co/Intel/Qwen3-Next-80B-A3B-Thinking-int4-mixed-AutoRound)
 - Hugging Face for hosting the model
 - The localllama community for inspiration and feedback
