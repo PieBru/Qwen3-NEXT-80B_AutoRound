@@ -47,7 +47,7 @@ def main():
             model = AutoModelForCausalLM.from_pretrained(
                 model_name,
                 device_map="auto",
-                torch_dtype=torch.float16,
+                dtype=torch.float16,
                 trust_remote_code=True,
                 low_cpu_mem_usage=True
             )
@@ -56,7 +56,7 @@ def main():
             model = AutoModelForCausalLM.from_pretrained(
                 model_name,
                 device_map="cpu",
-                torch_dtype=torch.float32,
+                dtype=torch.float32,
                 trust_remote_code=True,
                 low_cpu_mem_usage=True
             )
