@@ -4,7 +4,7 @@ Local inference solution for running Qwen3-Next-80B with Intel's 4-bit AutoRound
 
 ## Overview
 
-This project provides a Python implementation for running the massive 80B parameter Qwen3-Next model on consumer GPUs using Intel's AutoRound quantization, reducing memory requirements from 160GB to ~29GB while maintaining model quality.
+This project provides a Python implementation for running the Qwen3-Next 80B parameter model on consumer computers using Intel's AutoRound quantization, reducing memory requirements from 160GB to less than 64GB RAM when running on CPU only, while maintaining some model quality.
 
 ## TL;DR Quick Start
 
@@ -25,14 +25,23 @@ source .venv/bin/activate
 export UV_LINK_MODE=copy
 uv pip install -r requirements.txt --no-build-isolation -U
 
+# Disable GIL for free-threaded Python
+export PYTHON_GIL=0
+
 # Authenticate and run
 hf auth login
 python run_qwen3_80b.py
+
+# To see the model's thinking process:
+python qwen3_thinking.py    # Chain-of-Thought Mode
+
+# Verify your environment is properly configured:
+python test_deps.py
 ```
 
 ## Features
 
-- ✅ **4-bit Quantized Inference** - Run 80B models with ~29GB memory footprint
+- ✅ **4-bit Quantized Inference** - Run 80B models with <64GB memory footprint
 - ✅ **Chain-of-Thought Support** - Parse and display the model's thinking process
 - ✅ **Interactive Chat Mode** - Real-time conversational interface
 - ✅ **Memory Efficient** - Automatic GPU memory management and CPU offloading
@@ -40,70 +49,20 @@ python run_qwen3_80b.py
 
 ## Requirements
 
-- Python 3.13+ (free-threaded build recommended)
-- NVIDIA GPU with 16GB+ VRAM (24GB recommended)
-- CUDA 12.1+
-- ~30GB free disk space for model
-
-## Installation
-
-1. Clone the repository:
-```bash
-git clone https://github.com/PieBru/Qwen3-NEXT-80B_AutoRound.git
-cd Qwen3-NEXT-80B_AutoRound
-```
-
-2. Create virtual environment:
-```bash
-uv venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-```
-
-3. Install dependencies:
-```bash
-uv pip install -r requirements.txt
-```
-
-4. Authenticate with Hugging Face (required for model download):
-```bash
-huggingface-cli login
-```
-
-## Usage
-
-### Basic Inference
-
-Run the main inference script with interactive chat:
-
-```bash
-python run_qwen3_80b.py
-```
-
-### Chain-of-Thought Mode
-
-To see the model's thinking process:
-
-```bash
-python qwen3_thinking.py
-```
-
-### Test Dependencies
-
-Verify your environment is properly configured:
-
-```bash
-python test_deps.py
-```
+- Python 3.13+ (free-threaded build recommended, use `export PYTHON_GIL=0`)
+- ~50GB free disk space for model
+- OPTIONAL:
+  - NVIDIA GPU with 16GB+ VRAM, CUDA 12.1+
 
 ## Model Details
 
 - **Model**: Intel/Qwen3-Next-80B-A3B-Thinking-int4-mixed-AutoRound
-- **Size**: ~29GB (4-bit quantized)
+- **Size**: ~50GB (4-bit quantized)
 - **Original Size**: ~160GB (unquantized)
 - **Quantization**: Intel AutoRound 4-bit mixed precision
 - **Special Features**: Thinking tokens for chain-of-thought reasoning
 
-## Performance
+## Performance FIXME: to be defined
 
 On RTX 4090 (24GB VRAM):
 - Loading time: 2-3 minutes
@@ -122,7 +81,7 @@ On RTX 4090 (24GB VRAM):
 
 ## Note
 
-This is a bridge solution while waiting for llama.cpp integration. Once Qwen3-Next is supported in llama.cpp, this project will provide migration guides and eventually be deprecated.
+This is a bridge solution while waiting for llama.cpp integration. Once Qwen3-Next is supported in llama.cpp, this project will  eventually be deprecated.
 
 ## Contributing
 

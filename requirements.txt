@@ -18,3 +18,4 @@ numpy
 
 # Quantization support
 gptqmodel>=2.0
+auto-round>=0.5
