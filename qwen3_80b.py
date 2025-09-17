@@ -155,10 +155,12 @@ def load_model(args: argparse.Namespace):
     if device_map == "auto" and torch.cuda.is_available():
         gpu_name = torch.cuda.get_device_name(0)
         gpu_memory = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+        gpu_free = (torch.cuda.get_device_properties(0).total_memory - torch.cuda.memory_allocated(0)) / (1024**3)
+        gpu_used = torch.cuda.memory_allocated(0) / (1024**3)
 
         if not args.quiet:
             print(f"   GPU: {gpu_name}")
-            print(f"   VRAM: {gpu_memory:.1f}GB")
+            print(f"   VRAM: {gpu_memory:.1f}GB total, {gpu_free:.1f}GB available, {gpu_used:.1f}GB used")
 
         # Check if we have enough VRAM for full GPU loading
         if gpu_memory < 30 and args.use_gptq:
@@ -304,6 +306,20 @@ def load_model(args: argparse.Namespace):
     if not args.quiet:
         print(f"\n✅ Model loaded in {load_time:.1f}s ({load_time/60:.1f} minutes)")
 
+        # Show memory usage after loading
+        if torch.cuda.is_available():
+            gpu_used_after = torch.cuda.memory_allocated(0) / (1024**3)
+            gpu_reserved = torch.cuda.memory_reserved(0) / (1024**3)
+            gpu_free_after = (torch.cuda.get_device_properties(0).total_memory - torch.cuda.memory_reserved(0)) / (1024**3)
+            print(f"\n📊 Memory Usage After Loading:")
+            print(f"   VRAM: {gpu_used_after:.1f}GB allocated, {gpu_reserved:.1f}GB reserved, {gpu_free_after:.1f}GB free")
+
+        # RAM usage
+        import psutil
+        process = psutil.Process()
+        ram_usage_gb = process.memory_info().rss / (1024**3)
+        print(f"   RAM: {ram_usage_gb:.1f}GB used by process")
+
     # Show device map if verbose
     if args.verbose and hasattr(model, 'hf_device_map'):
         print("\n📍 Model layer distribution:")
@@ -398,6 +414,12 @@ def benchmark_mode(model, tokenizer, args):
     print("\n" + "=" * 60)
     print("Benchmark Mode")
     print("=" * 60)
+
+    # Show current memory status
+    if torch.cuda.is_available():
+        gpu_used = torch.cuda.memory_allocated(0) / (1024**3)
+        gpu_total = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+        print(f"\n📊 Current VRAM: {gpu_used:.1f}GB / {gpu_total:.1f}GB")
 
     test_prompts = [
         "What is 2+2?",
