@@ -119,6 +119,7 @@ def load_model(args: argparse.Namespace):
     if not args.quiet:
         print("=" * 60)
         print(f"Qwen3-Next-80B Loader v3.0")
+        print("https://github.com/PieBru/Qwen3-NEXT-80B_AutoRound")
         print("=" * 60)
 
     # Check cache
@@ -530,31 +531,41 @@ def test_dependencies():
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Qwen3-Next-80B AutoRound - Unified CLI",
+        description="Qwen3-Next-80B AutoRound - Smart Loading with Auto Strategy Selection",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-Examples:
-  %(prog)s                    # Interactive mode (hybrid CPU/GPU by default)
-  %(prog)s --benchmark        # Run performance benchmark
-  %(prog)s --thinking         # Enable thinking/reasoning display
-  %(prog)s --cpu              # CPU-only mode (no GPU)
-  %(prog)s --use-gptq         # Enable GPTQModel (for multi-GPU systems)
-  %(prog)s --check            # Check if model is cached
-  %(prog)s --test-deps        # Test dependencies
+EXAMPLES:
+  %(prog)s                    # Auto-detect best strategy and run
+  %(prog)s --thinking         # Show model's reasoning process
+  %(prog)s --benchmark        # Run performance tests
+  %(prog)s --check            # Check model cache status
 
-Advanced:
-  %(prog)s --gpu-memory 12 --cpu-memory 80   # Custom memory limits
-  %(prog)s --temperature 0.9 --max-tokens 200 # Generation parameters
-  %(prog)s --verbose          # Show detailed information
-  %(prog)s --quiet            # Minimal output
+LOADING STRATEGIES (auto-detected):
+  <30GB VRAM:  CPU-only mode (avoids failed GPU attempts)
+  ≥30GB VRAM:  Full GPU mode (best performance)
 
-Default Behavior (v3.0):
-  - GPTQModel is DISABLED by default for better compatibility
-  - Enables hybrid CPU/GPU loading on limited VRAM systems
-  - Use --use-gptq only for multi-GPU or specialized setups
+ADVANCED OPTIONS:
+  %(prog)s --cpu                      # Force CPU-only mode
+  %(prog)s --gpu-memory 14             # Limit GPU memory (GiB)
+  %(prog)s --cpu-memory 80             # Limit CPU memory (GiB)
+  %(prog)s --use-gptq                 # Enable GPTQModel (multi-GPU only)
+  %(prog)s --dry-run                  # Show strategy without loading
 
-Note: First load takes ~20-30 minutes due to single-threaded loading.
-      Subsequent loads are faster. The '28GB buffer' warning is normal.
+GENERATION PARAMETERS:
+  %(prog)s --temperature 0.9           # Sampling temperature (0-2)
+  %(prog)s --max-tokens 200            # Max tokens to generate
+
+OUTPUT CONTROL:
+  %(prog)s --verbose                   # Detailed information
+  %(prog)s --quiet                     # Minimal output
+
+v3.0 IMPROVEMENTS:
+  • Smart strategy selection saves 25-30 minutes
+  • No more double shard loading for <30GB VRAM
+  • Automatic resource detection and optimization
+  • See LOADING_STRATEGIES.md for resource matrix
+
+LOAD TIME: ~25-30 minutes (9 shards × 4.5GB each, sequential loading)
         """)
 
     # Model configuration
@@ -592,6 +603,8 @@ Note: First load takes ~20-30 minutes due to single-threaded loading.
                         help="Check model cache status and exit")
     parser.add_argument("--test-deps", action="store_true",
                         help="Test dependencies and exit")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="Show loading strategy without actually loading model")
 
     # Output control
     parser.add_argument("--verbose", "-v", action="store_true",
@@ -640,6 +653,38 @@ Note: First load takes ~20-30 minutes due to single-threaded loading.
 
     # Setup environment
     setup_environment(args.threads, args.verbose, args.offline if args.offline is not None else False)
+
+    # Dry run mode - just show strategy and exit
+    if args.dry_run:
+        import psutil
+        print("\n🔍 Dry Run Mode - Analyzing Strategy")
+        print("=" * 60)
+
+        # Show resources
+        total_ram = psutil.virtual_memory().total / (1024**3)
+        available_ram = psutil.virtual_memory().available / (1024**3)
+        print(f"📊 System Resources:")
+        print(f"   RAM: {total_ram:.1f}GB total, {available_ram:.1f}GB available")
+
+        if torch.cuda.is_available():
+            gpu_name = torch.cuda.get_device_name(0)
+            gpu_memory = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+            print(f"   GPU: {gpu_name}")
+            print(f"   VRAM: {gpu_memory:.1f}GB")
+
+            if gpu_memory >= 30:
+                print(f"\n✅ Would use: FULL GPU LOADING")
+                print(f"   All shards on GPU, best performance")
+            else:
+                print(f"\n⚠️  Would use: CPU-ONLY LOADING")
+                print(f"   Limited VRAM ({gpu_memory:.1f}GB < 30GB)")
+                print(f"   INT4 model doesn't support mixed placement")
+        else:
+            print(f"   GPU: Not available")
+            print(f"\n📊 Would use: CPU-ONLY LOADING")
+
+        print("\nDry run complete. Use without --dry-run to actually load.")
+        return 0
 
     # Load model
     try:

@@ -89,18 +89,18 @@ The INT4 quantized model requires either:
 - **ALL weights on CPU** (needs 50GB+ RAM)
 - **NOT mixed** (fails with "b_q_weight is not on GPU")
 
-### Tools
+### Usage
 
 ```bash
-# Automatic strategy selection
-./qwen3_80b.py  # Main script with smart detection
+# Automatic strategy selection (default)
+./qwen3_80b.py
 
-# See what strategy would be used
-./qwen3_80b_smart.py --dry-run
+# See what strategy would be used without loading
+./qwen3_80b.py --dry-run
 
 # Force specific strategies
 ./qwen3_80b.py --cpu            # Force CPU-only
-./qwen3_80b.py --use-gptq       # For 30GB+ VRAM
+./qwen3_80b.py --use-gptq       # For 30GB+ VRAM (multi-GPU)
 ```
 
 See [LOADING_STRATEGIES.md](LOADING_STRATEGIES.md) for complete resource matrix.
@@ -222,22 +222,20 @@ If you still see this error with older versions:
 - **Cause**: INT4 quantization requires all weights on same device (GPU or CPU, not mixed)
 - **Fix**: Update to v3.0 or use `--cpu` flag to force CPU-only mode
 
-### MoE Expert Offloading (Default Behavior)
+### MoE Expert Offloading (Limited Support)
 
-For GPUs with limited VRAM (16GB), the script now automatically uses hybrid CPU/GPU loading:
+For GPUs with limited VRAM (<30GB), the script automatically uses CPU-only mode:
 
 ```bash
-# DEFAULT: Hybrid loading is automatic for <30GB VRAM
+# DEFAULT: Auto-detects and uses appropriate mode
 ./qwen3_80b.py
 
-# Force GPTQModel for multi-GPU systems
-./qwen3_80b.py --use-gptq
-
-# Alternative scripts for experimentation
-./qwen3_80b_no_gptq.py      # Standalone version without GPTQModel
-./qwen3_80b_hybrid_moe.py   # Manual MoE layer placement
-./qwen3_80b_moe_offload.py  # Automatic MoE offloading
+# Force specific modes
+./qwen3_80b.py --cpu         # Force CPU-only
+./qwen3_80b.py --use-gptq    # Enable GPTQModel (30GB+ VRAM only)
 ```
+
+**Note**: The INT4 quantized model doesn't support mixed CPU/GPU placement well. For <30GB VRAM, it uses CPU-only mode to avoid loading failures.
 
 **Default Behavior (v3.0):**
 - GPTQModel is **disabled by default** for better compatibility
