@@ -136,7 +136,7 @@ The "Loading checkpoint shards" message refers to **loading the model from disk 
 4. **Mapped to GPU/CPU** based on the device_map
 
 The slow speed (~2.5 minutes per shard) is due to:
-- **Single-threaded loading** - The transformers library's safetensors loader only uses 1 CPU thread
+- **Single-threaded library limitation** - The transformers library's safetensors loader only uses 1 CPU thread
 - **On-the-fly quantization** - 4-bit AutoRound weights are being processed during loading
 - **Memory mapping** - 80B parameters being distributed across GPU and CPU memory
 - **Sequential processing** - Each shard must be loaded and processed in order
@@ -163,8 +163,9 @@ If the model appears stuck during loading:
 ### "b_q_weight is not on GPU" Error
 If you encounter `RuntimeError: b_q_weight is not on GPU`:
 - **Cause**: The quantization library expects all model weights on GPU, but your GPU doesn't have enough VRAM
-- **Solution**: Use CPU-only mode: `python qwen3_80b.py --cpu`
-- **Explanation**: The 4-bit quantization post-processing requires either all weights on GPU or CPU, not mixed
+- **Solution**: The script now auto-detects this and switches to CPU-only mode automatically
+- **Manual override**: Use `python qwen3_80b.py --cpu` to force CPU mode
+- **Explanation**: The 4-bit quantization (GPTQModel) requires either all weights on GPU or CPU, not mixed. GPUs with <30GB VRAM will automatically use CPU mode
 
 ### GPU Memory Warning (Limited VRAM)
 If you see: `Current model requires 28781064256 bytes of buffer for offloaded layers`
@@ -205,6 +206,13 @@ This automatically distributes the model:
 
 **Bottom line:** The warning is misleading - it appears before the library knows we're using `offload_buffers=True`. The model works correctly despite the warning.
 
+### Intel Extension for PyTorch Warning (CPU Mode)
+If you see: `Better backend is found, please install all the following requirements`
+- **This is just a suggestion**, not an error. The model works fine without it
+- **Cannot install on Python 3.13t**: Intel Extension doesn't support free-threaded Python yet
+- **Performance impact**: Minimal for this quantized model
+- **You can safely ignore this warning**
+
 ## Project Status
 
 ### ✅ Completed Features
@@ -241,6 +249,7 @@ MIT License - See LICENSE file for details
 
 ## Acknowledgments
 
-- [Intel for the AutoRound quantized model](https://huggingface.co/Intel/Qwen3-Next-80B-A3B-Thinking-int4-mixed-AutoRound)
-- Hugging Face for hosting the model
+- [Qwen workgroup for the original model](https://huggingface.co/Qwen/Qwen3-Next-80B-A3B-Thinking)
+- [Intel for the AutoRound quantized model](https://github.com/intel/auto-round)
+- [Hugging Face for hosting the model](https://huggingface.co/Intel/Qwen3-Next-80B-A3B-Thinking-int4-mixed-AutoRound)
 - [The LocalLLaMA community](https://www.reddit.com/r/LocalLLaMA/) for inspiration and feedback

@@ -108,7 +108,7 @@ def load_model(args: argparse.Namespace):
     # Print configuration
     if not args.quiet:
         print("=" * 60)
-        print(f"Qwen3-Next-80B Loader v2.0")
+        print(f"Qwen3-Next-80B Loader v2.1")
         print("=" * 60)
 
     # Check cache
@@ -137,9 +137,10 @@ def load_model(args: argparse.Namespace):
         print(f"\n📊 System Resources:")
         print(f"   RAM: {total_ram:.1f}GB total, {available_ram:.1f}GB available")
 
-    # GPU detection
+    # GPU detection and quantized model handling
     device_map = args.device_map
     max_memory = None
+    force_cpu_for_quantized = False
 
     if device_map == "auto" and torch.cuda.is_available():
         gpu_name = torch.cuda.get_device_name(0)
@@ -149,21 +150,33 @@ def load_model(args: argparse.Namespace):
             print(f"   GPU: {gpu_name}")
             print(f"   VRAM: {gpu_memory:.1f}GB")
 
-        # Memory allocation
-        gpu_limit = args.gpu_memory or min(14, int(gpu_memory * 0.9))
-        cpu_limit = args.cpu_memory or int(available_ram * 0.9)
+        # For quantized models, we need enough VRAM for the entire model
+        # If not, fall back to CPU-only mode
+        if gpu_memory < 30:  # Quantized model needs ~29GB
+            force_cpu_for_quantized = True
+            if not args.quiet:
+                print(f"   ⚠️  Insufficient VRAM for quantized model ({gpu_memory:.1f}GB < 30GB)")
+                print(f"   📊 Switching to CPU-only mode for compatibility")
+            device_map = "cpu"
+        else:
+            # Memory allocation for GPU with sufficient VRAM
+            gpu_limit = args.gpu_memory or int(gpu_memory * 0.85)
+            cpu_limit = args.cpu_memory or int(available_ram * 0.9)
 
-        max_memory = {
-            0: f"{gpu_limit}GiB",
-            "cpu": f"{cpu_limit}GiB"
-        }
+            max_memory = {
+                0: f"{gpu_limit}GiB",
+                "cpu": f"{cpu_limit}GiB"
+            }
 
+            if not args.quiet:
+                print(f"   Memory limits: GPU={gpu_limit}GiB, CPU={cpu_limit}GiB")
+
+    if device_map == "cpu":
         if not args.quiet:
-            print(f"   Memory limits: GPU={gpu_limit}GiB, CPU={cpu_limit}GiB")
-
-    elif device_map == "cpu":
-        if not args.quiet:
-            print("   Mode: CPU-only (no GPU)")
+            if force_cpu_for_quantized:
+                print("   Mode: CPU-only (quantized model compatibility)")
+            else:
+                print("   Mode: CPU-only (no GPU or --cpu flag)")
 
     # Loading info
     if not args.quiet:
@@ -198,20 +211,59 @@ def load_model(args: argparse.Namespace):
 
     # Get offload folder
     offload_folder = get_offload_folder(args)
-    if args.verbose and not args.no_offload:
+    if args.verbose and not args.no_offload and device_map != "cpu":
         print(f"   📁 Offload folder: {offload_folder}")
 
-    model = AutoModelForCausalLM.from_pretrained(
-        str(cache_path) if is_cached else model_name,
-        dtype=torch.float16 if not args.fp32 else torch.float32,
-        device_map=device_map,
-        max_memory=max_memory,
-        trust_remote_code=True,
-        low_cpu_mem_usage=True,
-        local_files_only=is_cached,
-        offload_buffers=not args.no_offload,
-        offload_folder=offload_folder
-    )
+    # Special handling for CPU-only mode to avoid quantization issues
+    load_kwargs = {
+        "dtype": torch.float16 if not args.fp32 else torch.float32,
+        "trust_remote_code": True,
+        "low_cpu_mem_usage": True,
+        "local_files_only": is_cached,
+    }
+
+    if device_map == "cpu":
+        # For CPU mode, don't use device_map or max_memory
+        load_kwargs["device_map"] = None  # Let model handle device placement
+    else:
+        # For GPU mode with sufficient VRAM
+        load_kwargs["device_map"] = device_map
+        load_kwargs["max_memory"] = max_memory
+        load_kwargs["offload_buffers"] = not args.no_offload
+        load_kwargs["offload_folder"] = offload_folder
+
+    try:
+        model = AutoModelForCausalLM.from_pretrained(
+            str(cache_path) if is_cached else model_name,
+            **load_kwargs
+        )
+
+        # Move to CPU if needed
+        if device_map == "cpu" and hasattr(model, 'cpu'):
+            if args.verbose:
+                print("   Moving model to CPU...")
+            model = model.cpu()
+
+    except RuntimeError as e:
+        if "not on GPU" in str(e) or "b_q_weight" in str(e):
+            if not args.quiet:
+                print(f"\n⚠️  Quantized model requires all weights on same device")
+                print(f"   Retrying with CPU-only mode...")
+
+            # Retry with CPU-only
+            device_map = "cpu"
+            model = AutoModelForCausalLM.from_pretrained(
+                str(cache_path) if is_cached else model_name,
+                dtype=torch.float16 if not args.fp32 else torch.float32,
+                device_map=None,
+                trust_remote_code=True,
+                low_cpu_mem_usage=True,
+                local_files_only=is_cached,
+            )
+            if hasattr(model, 'cpu'):
+                model = model.cpu()
+        else:
+            raise
 
     load_time = time.time() - start_time
 
@@ -246,8 +298,10 @@ def interactive_mode(model, tokenizer, args):
 
             # Tokenize
             inputs = tokenizer(user_input, return_tensors="pt")
-            if torch.cuda.is_available() and args.device_map == "auto":
-                inputs = {k: v.cuda() if hasattr(v, 'cuda') else v for k, v in inputs.items()}
+            # Check if model is on GPU
+            model_device = next(model.parameters()).device if hasattr(model, 'parameters') else torch.device('cpu')
+            if model_device.type == 'cuda':
+                inputs = {k: v.to(model_device) if hasattr(v, 'to') else v for k, v in inputs.items()}
 
             # Generate
             if not args.quiet:
@@ -320,8 +374,10 @@ def benchmark_mode(model, tokenizer, args):
         print(f"\nTest {i}/{len(test_prompts)}: '{prompt}'")
 
         inputs = tokenizer(prompt, return_tensors="pt")
-        if torch.cuda.is_available() and args.device_map == "auto":
-            inputs = {k: v.cuda() if hasattr(v, 'cuda') else v for k, v in inputs.items()}
+        # Check if model is on GPU
+        model_device = next(model.parameters()).device if hasattr(model, 'parameters') else torch.device('cpu')
+        if model_device.type == 'cuda':
+            inputs = {k: v.to(model_device) if hasattr(v, 'to') else v for k, v in inputs.items()}
 
         start_time = time.time()
         with torch.no_grad():
@@ -428,7 +484,7 @@ Note: First load takes ~20-30 minutes due to single-threaded loading.
 
     # Memory configuration
     parser.add_argument("--gpu-memory", type=int, metavar="GB",
-                        help="Max GPU memory in GiB (default: 14)")
+                        help="Max GPU memory in GiB (default: 85%% of available)")
     parser.add_argument("--cpu-memory", type=int, metavar="GB",
                         help="Max CPU memory in GiB (default: 90%% of available)")
     parser.add_argument("--no-offload", action="store_true",
