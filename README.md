@@ -179,12 +179,24 @@ If you encounter `RuntimeError: b_q_weight is not on GPU` or `Expected x.is_cuda
 For GPUs with limited VRAM (16GB), you can try MoE-specific offloading strategies:
 
 ```bash
-# Hybrid MoE loading - experts on CPU, non-experts on GPU
+# RECOMMENDED: Disable GPTQModel for hybrid loading
+./qwen3_80b.py --no-gptq
+
+# Alternative: Pure transformers loader without GPTQModel
+./qwen3_80b_no_gptq.py
+
+# Experimental: Manual MoE layer placement
 ./qwen3_80b_hybrid_moe.py
 
-# Automatic MoE offloading with accelerate
+# Experimental: Automatic MoE offloading
 ./qwen3_80b_moe_offload.py
 ```
+
+**Why --no-gptq Works Better:**
+- GPTQModel has internal CUDA kernels that prevent CPU offloading
+- Disabling it allows standard transformers to handle hybrid CPU/GPU loading
+- Enables proper MoE expert offloading to system RAM
+- Works with accelerate's device mapping for intelligent layer distribution
 
 **MoE Architecture Details:**
 - Qwen3-Next-80B has 512 experts with 10 experts activated per token
@@ -192,7 +204,14 @@ For GPUs with limited VRAM (16GB), you can try MoE-specific offloading strategie
 - Expert layers require ~32GB (offloaded to CPU RAM)
 - Trade-off: Slower inference but enables running on consumer GPUs
 
-**Note:** These approaches are experimental and may have compatibility issues with the GPTQModel quantization format
+**Recommended for Limited VRAM:**
+```bash
+# For 16GB GPUs - disables GPTQModel, enables hybrid loading
+./qwen3_80b.py --no-gptq
+
+# With custom memory limits
+./qwen3_80b.py --no-gptq --gpu-memory 14 --cpu-memory 80
+```
 
 ### GPU Memory Warning (Limited VRAM)
 If you see: `Current model requires 28781064256 bytes of buffer for offloaded layers`

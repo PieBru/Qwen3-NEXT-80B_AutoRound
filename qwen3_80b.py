@@ -103,6 +103,11 @@ def load_model(args: argparse.Namespace):
     from transformers import AutoModelForCausalLM, AutoTokenizer
     import psutil
 
+    # Optionally disable GPTQModel
+    if args.no_gptq:
+        os.environ["NO_GPTQMODEL"] = "1"
+        print("   ℹ️  GPTQModel disabled - using standard transformers loading")
+
     model_name = args.model
 
     # Print configuration
@@ -150,22 +155,40 @@ def load_model(args: argparse.Namespace):
             print(f"   GPU: {gpu_name}")
             print(f"   VRAM: {gpu_memory:.1f}GB")
 
-        # For quantized models, we need enough VRAM for the entire model
-        # GPTQModel has internal CUDA operations that don't work well with mixed CPU/GPU
-        if gpu_memory < 30:  # Quantized model needs ~29GB
+        # For quantized models with GPTQModel, we need enough VRAM for the entire model
+        # But if --no-gptq is used, we can do hybrid loading
+        if gpu_memory < 30 and not args.no_gptq:  # Quantized model needs ~29GB with GPTQModel
             force_cpu_for_quantized = True
             if not args.quiet:
                 print(f"   ⚠️  Insufficient VRAM for quantized model ({gpu_memory:.1f}GB < 30GB)")
                 print(f"   ❌ GPTQModel quantization requires full GPU loading")
                 print(f"   💡 Alternatives:")
-                print(f"      1. Use a GPU with 30GB+ VRAM")
-                print(f"      2. Use GGUF format models for CPU inference")
-                print(f"      3. Use unquantized models with mixed precision")
-            print("\n❌ Cannot run this quantized model with limited GPU memory")
-            print("   The GPTQModel library has internal CUDA kernels that require full GPU loading.")
+                print(f"      1. Use --no-gptq flag for hybrid CPU/GPU loading")
+                print(f"      2. Use a GPU with 30GB+ VRAM")
+                print(f"      3. Use GGUF format models for CPU inference")
+            print("\n❌ Cannot run with GPTQModel on limited GPU")
+            print("   Try: ./qwen3_80b.py --no-gptq  (for hybrid CPU/GPU mode)")
             return None, None
+        elif gpu_memory < 30 and args.no_gptq:
+            # With GPTQModel disabled, we can try hybrid loading
+            if not args.quiet:
+                print(f"   ℹ️  Limited VRAM ({gpu_memory:.1f}GB) - using hybrid CPU/GPU mode")
+                print(f"   ✓ GPTQModel disabled - MoE offloading enabled")
+
+            # Set up hybrid memory allocation
+            gpu_limit = args.gpu_memory or min(14, int(gpu_memory * 0.85))
+            cpu_limit = args.cpu_memory or int(available_ram * 0.75)
+
+            max_memory = {
+                0: f"{gpu_limit}GiB",
+                "cpu": f"{cpu_limit}GiB"
+            }
+
+            if not args.quiet:
+                print(f"   Memory limits: GPU={gpu_limit}GiB, CPU={cpu_limit}GiB")
+
         else:
-            # Memory allocation for GPU with sufficient VRAM
+            # GPU with sufficient VRAM (30GB+)
             gpu_limit = args.gpu_memory or int(gpu_memory * 0.85)
             cpu_limit = args.cpu_memory or int(available_ram * 0.9)
 
@@ -539,6 +562,8 @@ Note: First load takes ~20-30 minutes due to single-threaded loading.
                         help="Number of CPU threads (default: all)")
     parser.add_argument("--fp32", action="store_true",
                         help="Use FP32 precision instead of FP16")
+    parser.add_argument("--no-gptq", action="store_true",
+                        help="Disable GPTQModel for better CPU/hybrid compatibility")
 
     # Network
     parser.add_argument("--offline", action="store_true", dest="offline", default=None,
