@@ -147,10 +147,16 @@ def load_model(args: argparse.Namespace):
         print(f"\n📊 System Resources:")
         print(f"   RAM: {total_ram:.1f}GB total, {available_ram:.1f}GB available")
 
-    # GPU detection and quantized model handling
+    # Determine loading strategy BEFORE any model loading attempts
     device_map = args.device_map
     max_memory = None
-    force_cpu_for_quantized = False
+    loading_strategy = None  # 'gpu_full', 'cpu_only', or 'hybrid'
+
+    # Model requirements (INT4 quantized)
+    MODEL_SIZE_GB = 40  # Actual model size on disk
+    MIN_GPU_VRAM_FOR_FULL = 30  # Minimum VRAM needed for full GPU loading
+    MIN_GPU_VRAM_FOR_HYBRID = 14  # Minimum VRAM for hybrid (non-experts only)
+    MIN_RAM_FOR_CPU = 50  # Minimum RAM for CPU-only mode
 
     if device_map == "auto" and torch.cuda.is_available():
         gpu_name = torch.cuda.get_device_name(0)
@@ -162,37 +168,15 @@ def load_model(args: argparse.Namespace):
             print(f"   GPU: {gpu_name}")
             print(f"   VRAM: {gpu_memory:.1f}GB total, {gpu_free:.1f}GB available, {gpu_used:.1f}GB used")
 
-        # Check if we have enough VRAM for full GPU loading
-        if gpu_memory < 30 and args.use_gptq:
-            # GPTQModel requires full GPU loading
-            force_cpu_for_quantized = True
+        # DECISION LOGIC - Determine strategy based on available resources
+        if gpu_memory >= MIN_GPU_VRAM_FOR_FULL:
+            # Strategy 1: Full GPU loading (best performance)
+            loading_strategy = 'gpu_full'
             if not args.quiet:
-                print(f"   ⚠️  Insufficient VRAM for GPTQModel ({gpu_memory:.1f}GB < 30GB)")
-                print(f"   ❌ GPTQModel requires all weights on GPU")
-                print(f"   💡 Remove --use-gptq flag to enable hybrid loading")
-            print("\n❌ Cannot use GPTQModel with limited GPU memory")
-            print("   Try without --use-gptq for hybrid CPU/GPU mode")
-            return None, None
-        elif gpu_memory < 30 and not args.use_gptq:
-            # Default: hybrid loading for limited VRAM
-            if not args.quiet:
-                print(f"   ℹ️  Limited VRAM ({gpu_memory:.1f}GB) - using hybrid CPU/GPU mode")
-                print(f"   ✓ MoE expert offloading enabled (default mode)")
+                print(f"\n✅ Loading Strategy: FULL GPU")
+                print(f"   Sufficient VRAM ({gpu_memory:.1f}GB >= {MIN_GPU_VRAM_FOR_FULL}GB)")
+                print(f"   All model layers will load on GPU")
 
-            # Set up hybrid memory allocation
-            gpu_limit = args.gpu_memory or min(14, int(gpu_memory * 0.85))
-            cpu_limit = args.cpu_memory or int(available_ram * 0.75)
-
-            max_memory = {
-                0: f"{gpu_limit}GiB",
-                "cpu": f"{cpu_limit}GiB"
-            }
-
-            if not args.quiet:
-                print(f"   Memory limits: GPU={gpu_limit}GiB, CPU={cpu_limit}GiB")
-
-        else:
-            # GPU with sufficient VRAM (30GB+)
             gpu_limit = args.gpu_memory or int(gpu_memory * 0.85)
             cpu_limit = args.cpu_memory or int(available_ram * 0.9)
 
@@ -201,18 +185,45 @@ def load_model(args: argparse.Namespace):
                 "cpu": f"{cpu_limit}GiB"
             }
 
+        elif args.use_gptq:
+            # GPTQModel requires full GPU, but we don't have enough VRAM
             if not args.quiet:
-                print(f"   Memory limits: GPU={gpu_limit}GiB, CPU={cpu_limit}GiB")
+                print(f"\n❌ Cannot use GPTQModel with {gpu_memory:.1f}GB VRAM")
+                print(f"   GPTQModel requires {MIN_GPU_VRAM_FOR_FULL}GB+ for full GPU loading")
+                print(f"   Remove --use-gptq flag to enable CPU-only mode")
+            return None, None
+
+        else:
+            # Strategy 2: CPU-only (for INT4 quantized models with limited VRAM)
+            # We use CPU-only because INT4 quantized models have issues with mixed placement
+            loading_strategy = 'cpu_only'
+            device_map = "cpu"
+
+            if not args.quiet:
+                print(f"\n⚠️  Loading Strategy: CPU-ONLY")
+                print(f"   Limited VRAM ({gpu_memory:.1f}GB < {MIN_GPU_VRAM_FOR_FULL}GB)")
+                print(f"   INT4 quantized weights don't support mixed CPU/GPU well")
+                print(f"   Using CPU-only to avoid loading failures")
+
+            if available_ram < MIN_RAM_FOR_CPU:
+                print(f"\n⚠️  WARNING: Low RAM ({available_ram:.1f}GB < {MIN_RAM_FOR_CPU}GB)")
+                print(f"   Model may run slowly or fail to load")
+
+    elif device_map == "auto" and not torch.cuda.is_available():
+        # No GPU available
+        loading_strategy = 'cpu_only'
+        device_map = "cpu"
+        if not args.quiet:
+            print("\n📊 Loading Strategy: CPU-ONLY (no GPU detected)")
 
     if device_map == "cpu":
-        if not args.quiet:
-            print("   Mode: CPU-only requested")
-            if args.use_gptq:
-                print("   ⚠️  WARNING: GPTQModel has internal CUDA kernels")
-                print("   ⚠️  CPU-only mode may not work with --use-gptq")
-                print("   💡 Remove --use-gptq flag for CPU mode")
-            else:
-                print("   ℹ️  Using standard transformers for CPU compatibility")
+        loading_strategy = 'cpu_only'
+        if not args.quiet and loading_strategy != 'cpu_only':  # Don't repeat if already set
+            print("\n📊 Loading Strategy: CPU-ONLY (requested)")
+
+        if args.use_gptq:
+            print("   ⚠️  WARNING: GPTQModel may not work in CPU-only mode")
+            print("   💡 Remove --use-gptq flag for better compatibility")
 
     # Loading info
     if not args.quiet:
