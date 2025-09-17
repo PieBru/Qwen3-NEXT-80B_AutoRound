@@ -31,8 +31,11 @@ export PYTHON_GIL=0
 # Authenticate with HuggingFace (required for model download)
 hf auth login
 
-# Run the unified CLI
+# Run the unified CLI (v3.0 - automatic hybrid mode for <30GB VRAM)
 python qwen3_80b.py
+
+# For multi-GPU systems (enable GPTQModel optimization)
+python qwen3_80b.py --use-gptq
 
 # See all available options
 python qwen3_80b.py --help
@@ -61,10 +64,10 @@ python qwen3_80b.py --test-deps
 
 ## Usage
 
-### Quick Start
+### Quick Start (v3.0 - GPTQModel disabled by default)
 
 ```bash
-# Interactive chat mode (default)
+# Interactive chat mode (hybrid CPU/GPU for <30GB VRAM)
 python qwen3_80b.py
 
 # Show thinking/reasoning process
@@ -72,6 +75,9 @@ python qwen3_80b.py --thinking
 
 # Run performance benchmark
 python qwen3_80b.py --benchmark
+
+# For multi-GPU systems (enable GPTQModel)
+python qwen3_80b.py --use-gptq
 
 # Check if model is cached locally
 python qwen3_80b.py --check
@@ -174,29 +180,33 @@ If you encounter `RuntimeError: b_q_weight is not on GPU` or `Expected x.is_cuda
 
 **Important:** The `--cpu` flag won't work correctly with this GPTQModel quantized format due to internal CUDA dependencies
 
-### MoE Expert Offloading (Experimental)
+### MoE Expert Offloading (Default Behavior)
 
-For GPUs with limited VRAM (16GB), you can try MoE-specific offloading strategies:
+For GPUs with limited VRAM (16GB), the script now automatically uses hybrid CPU/GPU loading:
 
 ```bash
-# RECOMMENDED: Disable GPTQModel for hybrid loading
-./qwen3_80b.py --no-gptq
+# DEFAULT: Hybrid loading is automatic for <30GB VRAM
+./qwen3_80b.py
 
-# Alternative: Pure transformers loader without GPTQModel
-./qwen3_80b_no_gptq.py
+# Force GPTQModel for multi-GPU systems
+./qwen3_80b.py --use-gptq
 
-# Experimental: Manual MoE layer placement
-./qwen3_80b_hybrid_moe.py
-
-# Experimental: Automatic MoE offloading
-./qwen3_80b_moe_offload.py
+# Alternative scripts for experimentation
+./qwen3_80b_no_gptq.py      # Standalone version without GPTQModel
+./qwen3_80b_hybrid_moe.py   # Manual MoE layer placement
+./qwen3_80b_moe_offload.py  # Automatic MoE offloading
 ```
 
-**Why --no-gptq Works Better:**
-- GPTQModel has internal CUDA kernels that prevent CPU offloading
-- Disabling it allows standard transformers to handle hybrid CPU/GPU loading
-- Enables proper MoE expert offloading to system RAM
-- Works with accelerate's device mapping for intelligent layer distribution
+**Default Behavior (v3.0):**
+- GPTQModel is **disabled by default** for better compatibility
+- Automatically enables hybrid CPU/GPU loading for GPUs with <30GB VRAM
+- Standard transformers handles device mapping intelligently
+- MoE experts are offloaded to CPU RAM automatically
+
+**When to use --use-gptq:**
+- Multi-GPU systems where GPTQModel can distribute across GPUs
+- Systems with sufficient VRAM (30GB+) for full GPU loading
+- When specifically optimizing for multi-threaded CPU operations
 
 **MoE Architecture Details:**
 - Qwen3-Next-80B has 512 experts with 10 experts activated per token
