@@ -160,12 +160,19 @@ If the model appears stuck during loading:
 5. For CPU-only mode, ensure you have 64GB+ RAM available
 6. Use `export PYTHON_GIL=0` to avoid RuntimeWarnings with free-threaded Python
 
-### "b_q_weight is not on GPU" Error
-If you encounter `RuntimeError: b_q_weight is not on GPU`:
-- **Cause**: The quantization library expects all model weights on GPU, but your GPU doesn't have enough VRAM
-- **Solution**: The script now auto-detects this and switches to CPU-only mode automatically
-- **Manual override**: Use `python qwen3_80b.py --cpu` to force CPU mode
-- **Explanation**: The 4-bit quantization (GPTQModel) requires either all weights on GPU or CPU, not mixed. GPUs with <30GB VRAM will automatically use CPU mode
+### "b_q_weight is not on GPU" Error / CPU Mode Limitations
+If you encounter `RuntimeError: b_q_weight is not on GPU` or `Expected x.is_cuda() to be true`:
+- **Cause**: The GPTQModel quantization library has internal CUDA kernels that require GPU
+- **Issue**: This quantized model format doesn't support true CPU-only inference
+- **GPU Requirement**: Needs ~30GB VRAM to load the entire model on GPU
+
+**Solutions:**
+1. **Use a GPU with 30GB+ VRAM** (RTX 4090, A6000, etc.)
+2. **Use GGUF format models** with llama.cpp for CPU inference
+3. **Use unquantized models** with bitsandbytes for mixed precision
+4. **Try different quantization formats** that support CPU (GGML, ONNX)
+
+**Important:** The `--cpu` flag won't work correctly with this GPTQModel quantized format due to internal CUDA dependencies
 
 ### GPU Memory Warning (Limited VRAM)
 If you see: `Current model requires 28781064256 bytes of buffer for offloaded layers`

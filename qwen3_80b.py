@@ -151,13 +151,19 @@ def load_model(args: argparse.Namespace):
             print(f"   VRAM: {gpu_memory:.1f}GB")
 
         # For quantized models, we need enough VRAM for the entire model
-        # If not, fall back to CPU-only mode
+        # GPTQModel has internal CUDA operations that don't work well with mixed CPU/GPU
         if gpu_memory < 30:  # Quantized model needs ~29GB
             force_cpu_for_quantized = True
             if not args.quiet:
                 print(f"   ⚠️  Insufficient VRAM for quantized model ({gpu_memory:.1f}GB < 30GB)")
-                print(f"   📊 Switching to CPU-only mode for compatibility")
-            device_map = "cpu"
+                print(f"   ❌ GPTQModel quantization requires full GPU loading")
+                print(f"   💡 Alternatives:")
+                print(f"      1. Use a GPU with 30GB+ VRAM")
+                print(f"      2. Use GGUF format models for CPU inference")
+                print(f"      3. Use unquantized models with mixed precision")
+            print("\n❌ Cannot run this quantized model with limited GPU memory")
+            print("   The GPTQModel library has internal CUDA kernels that require full GPU loading.")
+            return None, None
         else:
             # Memory allocation for GPU with sufficient VRAM
             gpu_limit = args.gpu_memory or int(gpu_memory * 0.85)
@@ -173,10 +179,10 @@ def load_model(args: argparse.Namespace):
 
     if device_map == "cpu":
         if not args.quiet:
-            if force_cpu_for_quantized:
-                print("   Mode: CPU-only (quantized model compatibility)")
-            else:
-                print("   Mode: CPU-only (no GPU or --cpu flag)")
+            print("   Mode: CPU-only requested")
+            print("   ⚠️  WARNING: This GPTQModel quantized model has internal CUDA kernels")
+            print("   ⚠️  CPU-only mode may not work correctly")
+            print("   💡 For CPU inference, consider using GGUF format models instead")
 
     # Loading info
     if not args.quiet:
@@ -238,11 +244,12 @@ def load_model(args: argparse.Namespace):
             **load_kwargs
         )
 
-        # Move to CPU if needed
-        if device_map == "cpu" and hasattr(model, 'cpu'):
+        # For CPU mode, ensure model is properly on CPU
+        if device_map == "cpu":
             if args.verbose:
-                print("   Moving model to CPU...")
-            model = model.cpu()
+                print("   Ensuring model is on CPU...")
+            # Don't explicitly move - let the model handle its own device placement
+            # Some quantized models have internal CUDA kernels that shouldn't be moved
 
     except RuntimeError as e:
         if "not on GPU" in str(e) or "b_q_weight" in str(e):
@@ -260,8 +267,7 @@ def load_model(args: argparse.Namespace):
                 low_cpu_mem_usage=True,
                 local_files_only=is_cached,
             )
-            if hasattr(model, 'cpu'):
-                model = model.cpu()
+            # Don't explicitly move - let the model handle device placement
         else:
             raise
 
@@ -298,10 +304,15 @@ def interactive_mode(model, tokenizer, args):
 
             # Tokenize
             inputs = tokenizer(user_input, return_tensors="pt")
-            # Check if model is on GPU
-            model_device = next(model.parameters()).device if hasattr(model, 'parameters') else torch.device('cpu')
-            if model_device.type == 'cuda':
-                inputs = {k: v.to(model_device) if hasattr(v, 'to') else v for k, v in inputs.items()}
+
+            # Properly detect model device and move inputs
+            try:
+                model_device = next(model.parameters()).device
+            except:
+                model_device = torch.device('cpu')
+
+            # Move inputs to model device
+            inputs = {k: v.to(model_device) if hasattr(v, 'to') else v for k, v in inputs.items()}
 
             # Generate
             if not args.quiet:
@@ -374,10 +385,15 @@ def benchmark_mode(model, tokenizer, args):
         print(f"\nTest {i}/{len(test_prompts)}: '{prompt}'")
 
         inputs = tokenizer(prompt, return_tensors="pt")
-        # Check if model is on GPU
-        model_device = next(model.parameters()).device if hasattr(model, 'parameters') else torch.device('cpu')
-        if model_device.type == 'cuda':
-            inputs = {k: v.to(model_device) if hasattr(v, 'to') else v for k, v in inputs.items()}
+
+        # Properly detect model device and move inputs
+        try:
+            model_device = next(model.parameters()).device
+        except:
+            model_device = torch.device('cpu')
+
+        # Move inputs to model device
+        inputs = {k: v.to(model_device) if hasattr(v, 'to') else v for k, v in inputs.items()}
 
         start_time = time.time()
         with torch.no_grad():
@@ -559,6 +575,9 @@ Note: First load takes ~20-30 minutes due to single-threaded loading.
     # Load model
     try:
         model, tokenizer = load_model(args)
+        if model is None:
+            print("\n❌ Unable to load model with current configuration")
+            return 1
     except KeyboardInterrupt:
         print("\n\n⚠️  Loading interrupted by user")
         return 1
