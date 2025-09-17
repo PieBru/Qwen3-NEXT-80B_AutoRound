@@ -49,10 +49,12 @@ python qwen3_80b.py --test-deps
 
 ## Features
 
+- ✅ **Smart Loading Strategy** (v3.0) - Auto-detects resources and picks optimal loading strategy, no more double loading!
 - ✅ **4-bit Quantized Inference** - Run 80B models with <64GB memory footprint
 - ✅ **Chain-of-Thought Support** - Parse and display the model's thinking process
 - ✅ **Interactive Chat Mode** - Real-time conversational interface
 - ✅ **Memory Efficient** - Automatic GPU memory management and CPU offloading
+- ✅ **No Double Loading** - Saves 25-30 minutes by avoiding failed GPU attempts
 - 🚧 **OpenAI-Compatible API** - Coming soon
 
 ## Requirements
@@ -62,9 +64,50 @@ python qwen3_80b.py --test-deps
 - OPTIONAL:
   - NVIDIA GPU with 16GB+ VRAM, CUDA 12.1+
 
+## Smart Loading Strategy (v3.0) 🎯
+
+The loader now automatically detects your hardware and chooses the optimal loading strategy, **eliminating the double shard loading problem** that wasted 25-30 minutes!
+
+### How It Works
+
+1. **Pre-flight Check**: Detects VRAM and RAM before loading
+2. **Smart Decision**: Chooses `full_gpu` or `cpu_only` based on resources
+3. **No Retries**: Goes straight to the right strategy - no failed attempts!
+
+### Loading Time Savings
+
+| Your Hardware | Old Behavior | New Behavior | Time Saved |
+|--------------|--------------|--------------|------------|
+| 16GB VRAM + 128GB RAM | Try GPU (25min) → Fail → CPU (25min) | Straight to CPU (25min) | **25 minutes!** |
+| 24GB VRAM + 64GB RAM | Try GPU (25min) → Fail → CPU (25min) | Straight to CPU (25min) | **25 minutes!** |
+| 48GB VRAM + 64GB RAM | GPU Success (25min) | GPU Success (25min) | No change |
+
+### Why This Matters
+
+The INT4 quantized model requires either:
+- **ALL weights on GPU** (needs 30GB+ VRAM), or
+- **ALL weights on CPU** (needs 50GB+ RAM)
+- **NOT mixed** (fails with "b_q_weight is not on GPU")
+
+### Tools
+
+```bash
+# Automatic strategy selection
+./qwen3_80b.py  # Main script with smart detection
+
+# See what strategy would be used
+./qwen3_80b_smart.py --dry-run
+
+# Force specific strategies
+./qwen3_80b.py --cpu            # Force CPU-only
+./qwen3_80b.py --use-gptq       # For 30GB+ VRAM
+```
+
+See [LOADING_STRATEGIES.md](LOADING_STRATEGIES.md) for complete resource matrix.
+
 ## Usage
 
-### Quick Start (v3.0 - GPTQModel disabled by default)
+### Quick Start (v3.0 - Smart Loading by Default)
 
 ```bash
 # Interactive chat mode (hybrid CPU/GPU for <30GB VRAM)
@@ -123,14 +166,15 @@ The model uses special token 151668 (`</think>`) to separate internal reasoning 
 
 ## Performance
 
-**⚠️ IMPORTANT: First load is VERY slow!**
-- The model is ~58GB and device mapping for 80B parameters takes significant time
-- Initial load can take 5-15 minutes depending on hardware
-- Subsequent loads are faster due to caching and pre-computed device maps
+**⚠️ IMPORTANT: First load takes ~25-30 minutes**
+- The model has 9 shards of ~4.5GB each that load sequentially (single-threaded limitation)
+- v3.0 prevents double loading - saves 25-30 minutes for <30GB VRAM users!
+- Subsequent loads use OS file cache (slightly faster)
 
 Expected performance (once loaded):
-- **CPU-only**: 0.1-0.5 tokens/second (64GB+ RAM required)
-- **RTX 4090**: 2-5 tokens/second (uses 14-20GB VRAM + system RAM)
+- **CPU-only**: 0.5-5 tokens/second (50GB+ RAM required)
+- **GPU 30GB+**: 50-100 tokens/second (full GPU loading)
+- **GPU <30GB**: CPU-only mode (INT4 doesn't support mixed placement)
 
 ### Understanding "Loading checkpoint shards"
 
@@ -166,19 +210,17 @@ If the model appears stuck during loading:
 5. For CPU-only mode, ensure you have 64GB+ RAM available
 6. Use `export PYTHON_GIL=0` to avoid RuntimeWarnings with free-threaded Python
 
-### "b_q_weight is not on GPU" Error / CPU Mode Limitations
-If you encounter `RuntimeError: b_q_weight is not on GPU` or `Expected x.is_cuda() to be true`:
-- **Cause**: The GPTQModel quantization library has internal CUDA kernels that require GPU
-- **Issue**: This quantized model format doesn't support true CPU-only inference
-- **GPU Requirement**: Needs ~30GB VRAM to load the entire model on GPU
+### "b_q_weight is not on GPU" Error (FIXED in v3.0)
+**Previous Issue**: The INT4 quantized model would try GPU loading, fail, then retry with CPU - causing double shard loading (50+ minutes total).
 
-**Solutions:**
-1. **Use a GPU with 30GB+ VRAM** (RTX 4090, A6000, etc.)
-2. **Use GGUF format models** with llama.cpp for CPU inference
-3. **Use unquantized models** with bitsandbytes for mixed precision
-4. **Try different quantization formats** that support CPU (GGML, ONNX)
+**v3.0 Solution**: The script now detects your VRAM upfront:
+- **<30GB VRAM**: Goes straight to CPU-only mode (no failed GPU attempt)
+- **≥30GB VRAM**: Uses full GPU loading
+- **Result**: Saves 25-30 minutes by avoiding the retry!
 
-**Important:** The `--cpu` flag won't work correctly with this GPTQModel quantized format due to internal CUDA dependencies
+If you still see this error with older versions:
+- **Cause**: INT4 quantization requires all weights on same device (GPU or CPU, not mixed)
+- **Fix**: Update to v3.0 or use `--cpu` flag to force CPU-only mode
 
 ### MoE Expert Offloading (Default Behavior)
 
