@@ -174,6 +174,26 @@ If you encounter `RuntimeError: b_q_weight is not on GPU` or `Expected x.is_cuda
 
 **Important:** The `--cpu` flag won't work correctly with this GPTQModel quantized format due to internal CUDA dependencies
 
+### MoE Expert Offloading (Experimental)
+
+For GPUs with limited VRAM (16GB), you can try MoE-specific offloading strategies:
+
+```bash
+# Hybrid MoE loading - experts on CPU, non-experts on GPU
+./qwen3_80b_hybrid_moe.py
+
+# Automatic MoE offloading with accelerate
+./qwen3_80b_moe_offload.py
+```
+
+**MoE Architecture Details:**
+- Qwen3-Next-80B has 512 experts with 10 experts activated per token
+- Non-expert layers (attention, embeddings) can fit in ~8GB VRAM
+- Expert layers require ~32GB (offloaded to CPU RAM)
+- Trade-off: Slower inference but enables running on consumer GPUs
+
+**Note:** These approaches are experimental and may have compatibility issues with the GPTQModel quantization format
+
 ### GPU Memory Warning (Limited VRAM)
 If you see: `Current model requires 28781064256 bytes of buffer for offloaded layers`
 
