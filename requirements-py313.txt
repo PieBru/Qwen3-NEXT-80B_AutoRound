@@ -1,0 +1,34 @@
+# Requirements for Python 3.13+
+# Note: IPEX is not yet compatible with Python 3.13 (especially free-threaded builds)
+
+# Include base requirements
+-r requirements-base.txt
+
+# PyTorch for Python 3.13
+# Latest development version for Python 3.13 support
+--index-url https://download.pytorch.org/whl/nightly/cu124
+torch>=2.6.0.dev20240101
+torchvision
+torchaudio
+
+# Note: Intel Extension for PyTorch (IPEX) is NOT available for Python 3.13
+# This means CPU inference will be slower compared to Python 3.11/3.12
+# Consider using Python 3.11 or 3.12 for better CPU performance
+
+# Alternative optimizations for Python 3.13
+# Since IPEX is not available, we use other optimization libraries
+
+# ONNX Runtime for CPU optimization (alternative to IPEX)
+onnxruntime>=1.17.0
+
+# Additional CPU optimizations
+threadpoolctl>=3.0.0
+numexpr>=2.8.0
+
+# Memory profiling
+memory-profiler>=0.61.0
+py-spy>=0.3.14
+
+# Python 3.13 specific - free-threading support utilities
+# (These help manage the GIL-free environment)
+concurrent-log-handler>=0.9.25

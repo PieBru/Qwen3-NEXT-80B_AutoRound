@@ -1,0 +1,41 @@
+# Requirements for Python 3.11 and 3.12
+# Optimized for performance with available acceleration libraries
+
+# Include base requirements
+-r requirements-base.txt
+
+# PyTorch for Python 3.11/3.12
+# Use CUDA 12.1 for better compatibility
+--index-url https://download.pytorch.org/whl/cu121
+torch==2.5.1
+torchvision
+torchaudio
+
+# Intel Extension for PyTorch - CURRENTLY INCOMPATIBLE
+# IPEX 2.5.0 requires PyTorch 2.8.x which is not yet stable
+# Our model requires PyTorch 2.5.1 for compatibility
+# IPEX will be available once PyTorch 2.8 becomes stable
+#
+# Alternative optimizations are automatically included:
+# - Intel MKL (comes with PyTorch)
+# - OpenMP for parallel processing
+# - AutoRound quantization for memory efficiency
+
+# Optional Intel optimizations (uncomment to install)
+# Intel Neural Compressor for additional quantization optimizations
+# neural-compressor>=2.5.0
+
+# OpenVINO for alternative inference backend
+# openvino>=2024.0.0
+# optimum-intel>=1.15.0
+
+# ONNX Runtime with Intel optimizations
+# onnxruntime-openvino>=1.17.0
+
+# Additional optimizations for Intel CPUs
+mkl>=2023.0.0
+mkl-service>=2.4.0
+
+# Memory profiling (useful for optimization)
+memory-profiler>=0.61.0
+py-spy>=0.3.14

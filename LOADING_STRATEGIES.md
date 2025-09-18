@@ -11,7 +11,7 @@
 ### 1. FULL GPU LOADING
 **Requirements**: 30GB+ VRAM
 **Performance**: ⚡⚡⚡⚡⚡ (Fastest)
-**Load Time**: ~25 minutes (first time)
+**Load Time**: 30-60 minutes (first time)
 
 | VRAM | RAM | Strategy | Notes |
 |------|-----|----------|-------|
@@ -25,7 +25,7 @@
 ### 2. HYBRID GPU/CPU LOADING
 **Requirements**: 14-29GB VRAM + 60GB+ RAM
 **Performance**: ⚡⚡⚡ (Moderate)
-**Load Time**: ~25 minutes + overhead
+**Load Time**: 30-60 minutes + overhead
 
 | VRAM | RAM | Strategy | Distribution |
 |------|-----|----------|--------------|
@@ -43,7 +43,7 @@
 ### 3. CPU-ONLY LOADING
 **Requirements**: 50GB+ RAM
 **Performance**: ⚡ (Slowest)
-**Load Time**: ~25-30 minutes
+**Load Time**: 30-60 minutes
 
 | VRAM | RAM | Strategy | Feasibility |
 |------|-----|----------|-------------|
@@ -59,7 +59,7 @@
 ### 4. STREAMING/OFFLOADED LOADING
 **Requirements**: 8-13GB VRAM + 32GB+ RAM
 **Performance**: ⚡⚡ (Slow but functional)
-**Load Time**: ~25 minutes + constant loading
+**Load Time**: 30-60 minutes + constant loading
 
 | VRAM | RAM | Strategy | Mechanism |
 |------|-----|----------|-----------|
@@ -122,9 +122,9 @@ low_cpu_mem_usage = True
 ## Loading Time Optimizations
 
 ### First Load (No Cache)
-1. **Sequential Loading**: ~25-30 minutes
+1. **Sequential Loading**: 30-60 minutes
 2. **Parallel Shard Loading**: Not supported (model limitation)
-3. **Memory-mapped Loading**: ~20-25 minutes (experimental)
+3. **Memory-mapped Loading**: 25-45 minutes (experimental)
 
 ### Subsequent Loads
 1. **OS File Cache**: ~15-20 minutes (if files in RAM cache)

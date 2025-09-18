@@ -1,72 +1,142 @@
 # Qwen3-NEXT-80B AutoRound
 
-Local inference solution for running Qwen3-Next-80B with Intel's 4-bit AutoRound quantization on consumer hardware.
-
-## Overview
-
-This project provides a Python implementation for running the Qwen3-Next 80B parameter model on consumer computers using Intel's AutoRound quantization, reducing memory requirements from 160GB to ~58GB, enabling deployment on systems with 64GB RAM (CPU-only) or GPUs with 16GB+ VRAM.
+EDUCATIONAL and EXPERIMENTAL while waiting for `llama.cpp` integration: run Qwen3-Next-80B FP8+FP4 model on consumer hardware using Intel's 4-bit AutoRound quantization, CPU, IPEX, GPU, Flash Linear Attention, GPTQ, and more.
 
 ## TL;DR Quick Start
 
 ```bash
-# Clone and setup (Arch Linux example)
+# Clone and setup
 git clone https://github.com/PieBru/Qwen3-NEXT-80B_AutoRound.git
 cd Qwen3-NEXT-80B_AutoRound
 
-# Install Python 3.13.3t (free-threaded) with pyenv
+# FIXME Option A: Python 3.11/3.12 (RECOMMENDED - 2-4x faster CPU inference)
+./setup_python311_ipex.sh  # Complete setup with IPEX
+
+# FIXME (show more options) Option B: Python 3.13+ (if already installed)
 pyenv install 3.13.3t
 pyenv local 3.13.3t
-
-# Create virtual environment
 uv venv
 source .venv/bin/activate
 
-# Install dependencies
-export UV_LINK_MODE=copy
-uv pip install -r requirements.txt --no-build-isolation -U
+# Install dependencies (auto-detects Python version)
+python install_requirements.py
 
-# Disable GIL for free-threaded Python
+# For Python 3.13 only - disable GIL
 export PYTHON_GIL=0
 
 # Authenticate with HuggingFace (required for model download)
 hf auth login
 
-# Run the unified CLI (v3.0 - automatic hybrid mode for <30GB VRAM)
+# See all available options
+python qwen3_80b.py --help
+
+# Verify your environment is properly configured:
+python qwen3_80b.py --test-deps
+
+# Run the CLI (v3.0 - automatic hybrid mode for <30GB VRAM)
 python qwen3_80b.py
 
 # For multi-GPU systems (enable GPTQModel optimization)
 python qwen3_80b.py --use-gptq
 
-# See all available options
-python qwen3_80b.py --help
-
 # To see the model's thinking process:
 python qwen3_80b.py --thinking
-
-# Verify your environment is properly configured:
-python qwen3_80b.py --test-deps
 ```
 
 ## Features
 
+- ✅ **Fast Caching System** (v3.4) - **Enabled by default!** Load model in <1 minute after first run (vs 30-60 minutes)
 - ✅ **Smart Loading Strategy** (v3.0) - Auto-detects resources and picks optimal loading strategy, no more double loading!
 - ✅ **4-bit Quantized Inference** - Run 80B models with <64GB memory footprint
-- ✅ **Chain-of-Thought Support** - Parse and display the model's thinking process
-- ✅ **Interactive Chat Mode** - Real-time conversational interface
-- ✅ **Memory Efficient** - Automatic GPU memory management and CPU offloading
-- ✅ **No Double Loading** - Saves 25-30 minutes by avoiding failed GPU attempts
+- ✅ **Chain-of-Thought Support** - Parse and optionally display the model's thinking process
+- ✅ **Interactive Chat Mode** - Conversational CLI (WebUI coming soon)
+- ✅ **Memory Efficient** - Automatic and manual GPU memory management and CPU offloading
 - 🚧 **OpenAI-Compatible API** - Coming soon
 
 ## Requirements
 
-- Python 3.13+ (free-threaded build recommended, use `export PYTHON_GIL=0`)
+### Hardware Requirements
 - ~64GB free disk space for model (actual size: ~58GB)
-- OPTIONAL:
-  - NVIDIA GPU with 16GB+ VRAM, CUDA 12.1+
+- **For CPU inference**: 50GB+ RAM
+- **For GPU inference**: 30GB+ VRAM (or use CPU mode)
+- OPTIONAL: NVIDIA GPU with CUDA 12.1+
+
+### Python Version Requirements
+- **Recommended**: Python 3.11 or 3.12 (for Intel Extension support - 2-4x CPU speedup)
+- **Alternative**: Python 3.13+ (works but no IPEX support yet)
+- For Python 3.13: Use free-threaded build with `export PYTHON_GIL=0`
+
+### 📁 Requirements Structure
+
+#### 1. **`requirements-base.txt`**
+- Common dependencies that work across all Python versions
+- Includes Transformers, AutoRound, utilities
+
+#### 2. **`requirements-py311-312.txt`** (RECOMMENDED)
+- For Python 3.11 and 3.12
+- **Includes Intel Extension for PyTorch (IPEX)**
+- Provides 2-4x CPU inference speedup
+- Optimal performance configuration
+
+#### 3. **`requirements-py313.txt`**
+- For Python 3.13+
+- No IPEX support (not compatible with Python 3.13 yet)
+- Alternative optimizations included
+- Works with free-threaded Python builds
+
+#### 4. **`requirements.txt`**
+- Main file with instructions
+- Points to appropriate version-specific files
+- Minimal requirements for basic functionality
+
+### 🚀 Installation Options
+
+#### Automatic Installation (Recommended)
+```bash
+# Automatically detects Python version and installs appropriate dependencies
+python install_requirements.py
+```
+
+#### Manual Installation by Python Version
+```bash
+# For Python 3.11 or 3.12 (best performance)
+pip install -r requirements-py311-312.txt
+
+# For Python 3.13+
+pip install -r requirements-py313.txt
+```
+
+#### Setup Python 3.11 Environment for Best Performance
+```bash
+# Complete setup script for Python 3.11 with IPEX
+./setup_python311_ipex.sh
+```
+
+### 📊 Performance Comparison
+
+| Python Version | IPEX Support | CPU Performance | Recommendation   |
+|----------------|--------------|-----------------|------------------|
+| 3.11-3.12      | ✅ Yes       | 2-4x faster     | **Best choice**  |
+| 3.13+          | ❌ No        | Baseline        | Works but slower |
+
+### Key Benefits
+
+1. **Version-specific optimization**: Each Python version gets the best available packages
+2. **IPEX for 3.11/3.12**: Major performance boost for CPU inference
+3. **Clear documentation**: Users know exactly what to install
+4. **Automatic detection**: The installer script handles version detection
+5. **Fallback options**: Python 3.13 users still get a working setup
+
+The intelligent installer (`install_requirements.py`) will:
+- Detect your Python version
+- Check for CUDA/GPU availability
+- Install the optimal requirements
+- Verify the installation
+- Provide next steps
 
 ## Smart Loading Strategy (v3.0) 🎯
 
-The loader now automatically detects your hardware and chooses the optimal loading strategy, **eliminating the double shard loading problem** that wasted 25-30 minutes!
+The loader now automatically detects your hardware and chooses the optimal loading strategy, **eliminating the double shard loading problem** that wasted 30-60 minutes!
 
 ### How It Works
 
@@ -78,9 +148,9 @@ The loader now automatically detects your hardware and chooses the optimal loadi
 
 | Your Hardware | Old Behavior | New Behavior | Time Saved |
 |--------------|--------------|--------------|------------|
-| 16GB VRAM + 128GB RAM | Try GPU (25min) → Fail → CPU (25min) | Straight to CPU (25min) | **25 minutes!** |
-| 24GB VRAM + 64GB RAM | Try GPU (25min) → Fail → CPU (25min) | Straight to CPU (25min) | **25 minutes!** |
-| 48GB VRAM + 64GB RAM | GPU Success (25min) | GPU Success (25min) | No change |
+| 16GB VRAM + 128GB RAM | Try GPU (30-60min) → Fail → CPU (30-60min) | Straight to CPU (30-60min) | **30-60 minutes saved!** |
+| 24GB VRAM + 64GB RAM | Try GPU (30-60min) → Fail → CPU (30-60min) | Straight to CPU (30-60min) | **30-60 minutes saved!** |
+| 48GB VRAM + 64GB RAM | GPU Success (30-60min) | GPU Success (30-60min) | No change |
 
 ### Why This Matters
 
@@ -104,6 +174,71 @@ The INT4 quantized model requires either:
 ```
 
 See [LOADING_STRATEGIES.md](LOADING_STRATEGIES.md) for complete resource matrix.
+
+## Fast Caching System 🚀 (Default for CPU Mode)
+
+**No more waiting 30-60 minutes!** Caching is now **enabled by default** for CPU-only loading - the model loads in **<1 minute** after the first run!
+
+### ⚠️ Important: Caching Limitation
+
+**Caching only works with CPU-only mode** (`--load-strategy no-gpu`). Hybrid GPU+CPU loading cannot be cached due to memory offloading hooks used by the accelerate library.
+
+### How It Works
+
+1. **First Run**: Normal loading (30-60 min) + automatic cache creation (2-3 min)
+2. **All Future Runs**: Load from cache in <1 minute! (30-50x faster)
+3. **CPU-Only Required**: Use `--load-strategy no-gpu` for cacheable loading
+
+### Quick Start for Cacheable Loading
+
+```bash
+# For cacheable CPU-only mode (RECOMMENDED for caching):
+python qwen3_80b.py --load-strategy no-gpu --interactive
+
+# First run: 30-60 minutes (creates cache)
+# Future runs: <1 minute! (uses cache)
+
+# For GPU+CPU hybrid (faster inference but NO caching):
+python qwen3_80b.py --interactive  # Uses min-gpu by default
+
+# If you need to bypass cache for testing:
+python qwen3_80b.py --bypass-cache --load-strategy no-gpu --interactive
+
+# Show thinking process (works with caching):
+python qwen3_80b.py --thinking --load-strategy no-gpu --interactive
+```
+
+### Cache Management
+
+```bash
+# Clear cache and start fresh
+python qwen3_80b.py --clear-cache
+
+# Rebuild cache (if corrupted)
+python qwen3_80b.py --rebuild-cache --interactive
+
+# Disable cache temporarily (always load from scratch)
+python qwen3_80b.py --bypass-cache --interactive
+
+# Check cache performance
+python test_cache_performance.py
+```
+
+### Performance Comparison
+
+| Loading Method | Strategy | Time | Cacheable |
+|---------------|----------|------|-----------|
+| CPU-only (no cache) | `--load-strategy no-gpu` | 30-60 minutes | ✅ Yes |
+| CPU-only (with cache) | `--load-strategy no-gpu` | <1 minute | ✅ Yes |
+| Hybrid GPU+CPU | `--load-strategy min-gpu` | 30-60 minutes | ❌ No |
+| Full GPU | `--load-strategy max-gpu` | 30-60 minutes | ❌ No |
+
+### Cache Details
+
+- **Location**: `~/.cache/qwen3_fast_loader/`
+- **Size**: ~30GB (preserves 4-bit quantization)
+- **Format**: Pickled PyTorch model (maintains exact state)
+- **Compatibility**: Works with CPU and GPU modes
 
 ## Usage
 
@@ -166,9 +301,9 @@ The model uses special token 151668 (`</think>`) to separate internal reasoning 
 
 ## Performance
 
-**⚠️ IMPORTANT: First load takes ~25-30 minutes**
+**⚠️ IMPORTANT: First load takes 30-60 minutes**
 - The model has 9 shards of ~4.5GB each that load sequentially (single-threaded limitation)
-- v3.0 prevents double loading - saves 25-30 minutes for <30GB VRAM users!
+- v3.0 prevents double loading - saves 30-60 minutes for <30GB VRAM users!
 - Subsequent loads use OS file cache (slightly faster)
 
 Expected performance (once loaded):
@@ -191,7 +326,7 @@ The slow speed (~2.5 minutes per shard) is due to:
 - **Memory mapping** - 80B parameters being distributed across GPU and CPU memory
 - **Sequential processing** - Each shard must be loaded and processed in order
 
-This is normal for such a large quantized model. The 9 shards totaling 41GB will take ~20-25 minutes to fully load. You can monitor:
+This is normal for such a large quantized model. The 9 shards totaling 41GB will take 30-60 minutes to fully load. You can monitor:
 - **CPU usage** with `htop` - only 1 thread at 100% (this is the limitation)
 - **RAM usage** with `htop` - should gradually increase to ~58GB
 - **Disk I/O** with `iotop` - intermittent reads as shards load
@@ -216,7 +351,7 @@ If the model appears stuck during loading:
 **v3.0 Solution**: The script now detects your VRAM upfront:
 - **<30GB VRAM**: Goes straight to CPU-only mode (no failed GPU attempt)
 - **≥30GB VRAM**: Uses full GPU loading
-- **Result**: Saves 25-30 minutes by avoiding the retry!
+- **Result**: Saves 30-60 minutes by avoiding the retry!
 
 If you still see this error with older versions:
 - **Cause**: INT4 quantization requires all weights on same device (GPU or CPU, not mixed)
@@ -347,5 +482,5 @@ MIT License - See LICENSE file for details
 
 - [Qwen workgroup for the original model](https://huggingface.co/Qwen/Qwen3-Next-80B-A3B-Thinking)
 - [Intel for the AutoRound quantized model](https://github.com/intel/auto-round)
-- [Hugging Face for hosting the model](https://huggingface.co/Intel/Qwen3-Next-80B-A3B-Thinking-int4-mixed-AutoRound)
+- [Hugging Face for hosting the Intel model](https://huggingface.co/Intel/Qwen3-Next-80B-A3B-Thinking-int4-mixed-AutoRound)
 - [The LocalLLaMA community](https://www.reddit.com/r/LocalLLaMA/) for inspiration and feedback

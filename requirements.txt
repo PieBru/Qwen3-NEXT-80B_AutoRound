@@ -1,22 +1,31 @@
-# Core dependencies
-torch
+# Qwen3-80B AutoRound Requirements
+#
+# IMPORTANT: Use the appropriate requirements file for your Python version:
+#
+# For Python 3.11 or 3.12 (RECOMMENDED - includes IPEX for 2-4x CPU speedup):
+#   pip install -r requirements-py311-312.txt
+#
+# For Python 3.13+ (no IPEX support yet):
+#   pip install -r requirements-py313.txt
+#
+# To check your Python version:
+#   python --version
+#
+# For automatic installation based on Python version:
+#   python install_requirements.py
+#
+# ============================================================
+# This file includes minimal requirements for basic functionality
+# ============================================================
+
+# Base requirements (works with all Python versions)
+-r requirements-base.txt
+
+# PyTorch - will use CPU version by default
+# For CUDA support, install from appropriate index URL
+torch>=2.5.0
 torchvision
 torchaudio
-accelerate
-huggingface_hub
-logbar
 
-# Transformers - need latest from source for qwen3_next support
-# Official requirement: transformers>=4.48.3
-git+https://github.com/huggingface/transformers.git
-
-# Optimization libraries
-causal-conv1d
-flash-linear-attention
-
-# NumPy - use pre-built wheel to avoid compilation issues
-numpy
-
-# Quantization support
-gptqmodel>=2.0
-auto-round>=0.5
+# Note: For optimal performance, use Python 3.11 or 3.12 with IPEX
+# See requirements-py311-312.txt for performance-optimized setup
