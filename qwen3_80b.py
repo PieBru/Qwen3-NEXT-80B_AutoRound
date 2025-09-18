@@ -119,6 +119,17 @@ class ModelCache:
     def save(self, model: Any, tokenizer: Any, model_name: str, device_type: str, is_ipex_optimized: bool = False) -> bool:
         """Save model to cache - handles models with hooks and IPEX optimization"""
         paths = self.get_cache_paths(model_name, device_type)
+
+        # Check if this is a huge model that shouldn't use pickle
+        model_param_count = sum(p.numel() for p in model.parameters())
+        model_size_gb = (model_param_count * 2) / (1024**3)  # Approximate size in GB
+
+        if not is_ipex_optimized and model_size_gb > 50:
+            print(f"\n⚠️  Model too large for pickle cache ({model_size_gb:.1f}GB estimated)")
+            print(f"   Pickle cache causes massive memory expansion (3x+ model size)")
+            print(f"   Please use IPEX cache instead: python qwen3_80b_ipex_cache.py")
+            return False
+
         print(f"\n💾 Creating fast-load cache...")
         if is_ipex_optimized:
             print(f"   📌 Saving IPEX-optimized model (skips repacking on load!)")
@@ -339,44 +350,18 @@ class ModelCache:
                     pbar.update(1)
 
             else:
-                # Standard pickle loading - this is a monolithic operation
+                # Standard pickle loading - DISABLED for large models
                 if TQDM_AVAILABLE:
-                    pbar.close()  # Close the misleading progress bar
+                    pbar.close()  # Close the progress bar
 
-                print("   Loading pickled model from cache...")
-                print("   ⚠️  This is a single operation that may take 1-2 minutes")
-                print("   ⚠️  Memory usage will grow to ~160GB during loading")
-                print("   💡 Consider using IPEX cache (qwen3_80b_ipex_cache.py) for better performance")
-
-                # Show initial memory status
-                mem_before = self.get_memory_status()
-                print(f"   📊 Before: {mem_before['ram_used']:.1f}GB used, {mem_before['ram_free']:.1f}GB free")
-
-                # Monitor memory in a separate thread if possible
-                import threading
-                stop_monitoring = threading.Event()
-
-                def monitor_memory():
-                    """Monitor memory usage during pickle loading"""
-                    max_used = 0
-                    while not stop_monitoring.is_set():
-                        mem = self.get_memory_status()
-                        max_used = max(max_used, mem['ram_used'])
-                        print(f"\r   📊 Loading: {mem['ram_used']:.1f}GB used, {mem['ram_free']:.1f}GB free", end='', flush=True)
-                        time.sleep(2)
-                    print(f"\n   📊 Peak: {max_used:.1f}GB used during loading")
-
-                # Start monitoring thread
-                monitor_thread = threading.Thread(target=monitor_memory, daemon=True)
-                monitor_thread.start()
-
-                # Load the pickle file (this is where memory grows)
-                try:
-                    with open(paths['model'], 'rb') as f:
-                        model = pickle.load(f)
-                finally:
-                    stop_monitoring.set()
-                    monitor_thread.join(timeout=1)
+                print("   ❌ PICKLE CACHE DISABLED for 80B model!")
+                print("   ⚠️  Pickle cache causes 3x memory expansion (240GB+)")
+                print("   ⚠️  This would cause OOM on most systems")
+                print("\n   🔧 SOLUTION: Use IPEX cache instead:")
+                print("      python qwen3_80b_ipex_cache.py --interactive")
+                print("\n   Or clear this bad cache and start fresh:")
+                print("      python qwen3_80b.py --clear-cache")
+                return None, None  # Force reload without pickle cache
 
             # Close progress bar if it's still open and we have IPEX model
             if TQDM_AVAILABLE and metadata.get('is_ipex_optimized', False):
@@ -575,18 +560,28 @@ def load_model(args: argparse.Namespace):
         if not args.rebuild_cache:
             model, tokenizer = cache.load(model_name, device_type)
             if model is not None and tokenizer is not None:
-                # Apply IPEX if available for CPU mode
-                if device_type == "cpu" and not args.no_ipex:
+                # Check if model is already IPEX-optimized from cache metadata
+                paths = cache.get_cache_paths(model_name, device_type)
+                is_ipex_optimized = False
+                if paths['metadata'].exists():
+                    with open(paths['metadata'], 'r') as f:
+                        metadata = json.load(f)
+                        is_ipex_optimized = metadata.get('is_ipex_optimized', False)
+
+                # Only apply IPEX if not already optimized
+                if device_type == "cpu" and not args.no_ipex and not is_ipex_optimized:
                     try:
                         import intel_extension_for_pytorch as ipex
                         if not args.quiet:
-                            print(f"\n🚀 Applying IPEX optimizations...")
+                            print(f"\n🚀 Applying IPEX optimizations (not in cache)...")
                         model = ipex.optimize(model, dtype=torch.float16 if not args.fp32 else torch.float32)
                         if not args.quiet:
                             print("   ✅ IPEX applied - 2-4x inference speedup!")
                     except ImportError:
                         if args.verbose:
                             print("   ℹ️  IPEX not available")
+                elif is_ipex_optimized and not args.quiet:
+                    print("   ✅ IPEX optimization already applied (from cache)")
                 return model, tokenizer
 
         # If we get here, cache miss or rebuild - will load normally and save to cache
