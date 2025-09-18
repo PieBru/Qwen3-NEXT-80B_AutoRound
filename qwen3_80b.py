@@ -659,11 +659,13 @@ def load_model(args: argparse.Namespace):
     if args.verbose and not args.no_offload and device_map != "cpu":
         print(f"   📁 Offload folder: {offload_folder}")
 
-    # Explain the upcoming "fast path" warning for CPU mode
+    # Explain the upcoming warnings and processes for CPU mode
     if device_map == "cpu" and not args.quiet:
-        print("\n   ℹ️  Note: You may see a 'fast path' warning below - this is harmless!")
-        print("   This warning is about GPU optimizations that don't apply to CPU mode.")
-        print("   The model will work perfectly fine without them.\n")
+        print("\n   ℹ️  Note: You may see warnings and progress bars below:")
+        print("   1. 'fast path' warning - harmless, about GPU optimizations")
+        print("   2. 'Loading checkpoint shards' - loading model files from disk")
+        print("   3. 'repacking to CPU/XPU format' - transformers optimizing for CPU")
+        print("   These are all normal and expected!\n")
 
     # Special handling for CPU-only mode to avoid quantization issues
     load_kwargs = {
@@ -846,7 +848,7 @@ def load_model(args: argparse.Namespace):
                     print(f"   ⚠️  WARNING: Only {total_available:.1f}GB available for IPEX (needs ~{IPEX_REQUIREMENT}GB more)")
                     print(f"      Process may be slow (using swap) or killed (OOM)")
 
-                print(f"   Repacking to CPU/XPU format (temporary 2x memory)...")
+                print(f"   Note: Model already repacked by transformers, IPEX optimizing further...")
 
             # Optimize model for CPU inference
             ipex_start = time.time()
