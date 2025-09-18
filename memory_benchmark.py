@@ -11,6 +11,14 @@ from typing import Dict, List, Tuple
 import gc
 import json
 
+# Import configuration
+try:
+    from config import BENCHMARK_CONFIG
+    MEM_CONFIG = BENCHMARK_CONFIG.get('memory', {})
+except ImportError:
+    # Fallback if config not available
+    MEM_CONFIG = {}
+
 
 class MemoryBenchmark:
     """Memory bandwidth testing utilities"""
@@ -19,7 +27,9 @@ class MemoryBenchmark:
         self.results = {}
         self.system_memory = psutil.virtual_memory().total / (1024**3)  # GB
 
-    def test_bandwidth(self, size_mb: int, iterations: int = 5, pattern: str = "sequential") -> Dict[str, float]:
+    def test_bandwidth(self, size_mb: int, iterations: int = None, pattern: str = "sequential") -> Dict[str, float]:
+        if iterations is None:
+            iterations = MEM_CONFIG.get('iterations', 5)
         """Test memory bandwidth for a given size"""
         size_bytes = size_mb * 1024 * 1024
         results = {
@@ -88,22 +98,25 @@ class MemoryBenchmark:
         print("\n🧪 Memory Performance Testing")
         print("=" * 50)
 
-        # Define test sizes based on available memory
+        # Define test sizes based on available memory and config
         test_sizes = []
 
         # Small (cache tests)
-        test_sizes.extend([1, 4, 8])  # MB
+        test_sizes.extend(MEM_CONFIG.get('test_sizes_mb', [1, 4, 8]))
 
         # Medium (L3 cache and RAM transition)
-        if self.system_memory > 8:
-            test_sizes.extend([32, 64, 128])
+        min_mem_medium = MEM_CONFIG.get('min_system_memory_gb', {}).get('medium', 8)
+        if self.system_memory > min_mem_medium:
+            test_sizes.extend(MEM_CONFIG.get('test_sizes_mb_medium', [32, 64, 128]))
 
         # Large (pure RAM)
-        if self.system_memory > 16:
-            test_sizes.extend([256, 512, 1024])
+        min_mem_large = MEM_CONFIG.get('min_system_memory_gb', {}).get('large', 16)
+        if self.system_memory > min_mem_large:
+            test_sizes.extend(MEM_CONFIG.get('test_sizes_mb_large', [256, 512, 1024]))
 
-        if self.system_memory > 32:
-            test_sizes.extend([2048, 4096])
+        min_mem_xlarge = MEM_CONFIG.get('min_system_memory_gb', {}).get('xlarge', 32)
+        if self.system_memory > min_mem_xlarge:
+            test_sizes.extend(MEM_CONFIG.get('test_sizes_mb_xlarge', [2048, 4096]))
 
         results = {
             'system_memory_gb': self.system_memory,
@@ -115,7 +128,8 @@ class MemoryBenchmark:
         print("\n📊 Sequential Access Pattern:")
         for size_mb in test_sizes:
             print(f"  Testing {size_mb}MB... ", end='', flush=True)
-            result = self.test_bandwidth(size_mb, iterations=3, pattern="sequential")
+            iterations = MEM_CONFIG.get('iterations', 3)
+            result = self.test_bandwidth(size_mb, iterations=iterations, pattern="sequential")
             results['sequential_tests'].append(result)
             if 'error' not in result:
                 print(f"✓ {result['avg_bandwidth_gbps']:.2f} GB/s")
@@ -126,7 +140,8 @@ class MemoryBenchmark:
         print("\n🎲 Random Access Pattern:")
         for size_mb in test_sizes[:5]:  # Only test smaller sizes for random
             print(f"  Testing {size_mb}MB... ", end='', flush=True)
-            result = self.test_bandwidth(size_mb, iterations=3, pattern="random")
+            iterations = MEM_CONFIG.get('iterations', 3)
+            result = self.test_bandwidth(size_mb, iterations=iterations, pattern="random")
             results['random_tests'].append(result)
             if 'error' not in result:
                 print(f"✓ {result['avg_bandwidth_gbps']:.2f} GB/s")

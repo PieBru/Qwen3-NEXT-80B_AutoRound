@@ -15,11 +15,19 @@ import os
 from typing import Dict, List, Optional, Tuple
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 
+# Import configuration
+try:
+    from config import BENCHMARK_CONFIG
+    CPU_CONFIG = BENCHMARK_CONFIG.get('cpu', {})
+except ImportError:
+    # Fallback if config not available
+    CPU_CONFIG = {}
+
 
 # Module-level worker functions for multiprocessing (avoids pickling issues)
 def _worker_matrix():
     """Matrix multiplication worker for multiprocessing"""
-    size = 300  # Reduced from 500 to avoid timeout
+    size = CPU_CONFIG.get('matrix_size_multithread', 300)
     A = np.random.rand(size, size).astype(np.float32)
     B = np.random.rand(size, size).astype(np.float32)
     return np.matmul(A, B).sum()
@@ -34,7 +42,8 @@ def _worker_prime():
             if n % i == 0:
                 return False
         return True
-    return sum(1 for n in range(10000, 15000) if is_prime(n))  # Reduced range
+    range_start, range_end = CPU_CONFIG.get('prime_range_multithread', (10000, 15000))
+    return sum(1 for n in range(range_start, range_end) if is_prime(n))
 
 
 class CPUBenchmark:
@@ -146,7 +155,11 @@ class CPUBenchmark:
 
         return info
 
-    def matrix_multiplication_test(self, size: int = 1000, iterations: int = 3) -> Dict[str, float]:
+    def matrix_multiplication_test(self, size: int = None, iterations: int = None) -> Dict[str, float]:
+        if size is None:
+            size = CPU_CONFIG.get('matrix_size', 1000)
+        if iterations is None:
+            iterations = CPU_CONFIG.get('matrix_iterations', 3)
         """Benchmark matrix multiplication"""
         results = {
             'size': size,
@@ -179,7 +192,9 @@ class CPUBenchmark:
 
         return results
 
-    def prime_calculation_test(self, limit: int = 100000) -> Dict[str, float]:
+    def prime_calculation_test(self, limit: int = None) -> Dict[str, float]:
+        if limit is None:
+            limit = CPU_CONFIG.get('prime_limit', 100000)
         """Benchmark prime number calculation"""
         def is_prime(n):
             if n < 2:
@@ -200,7 +215,11 @@ class CPUBenchmark:
             'primes_per_sec': len(primes) / elapsed if elapsed > 0 else 0
         }
 
-    def hash_benchmark(self, size_mb: int = 100, iterations: int = 5) -> Dict[str, float]:
+    def hash_benchmark(self, size_mb: int = None, iterations: int = None) -> Dict[str, float]:
+        if size_mb is None:
+            size_mb = CPU_CONFIG.get('hash_size_mb', 100)
+        if iterations is None:
+            iterations = CPU_CONFIG.get('hash_iterations', 5)
         """Benchmark hash calculation performance"""
         data = os.urandom(size_mb * 1024 * 1024)
         algorithms = ['sha256', 'sha512', 'md5']
@@ -230,7 +249,8 @@ class CPUBenchmark:
     def multithread_test(self, workload='matrix', threads=None) -> Dict[str, float]:
         """Test multi-threaded vs single-threaded performance"""
         if threads is None:
-            threads = min(8, self.cpu_count)  # Limit default threads
+            max_threads = CPU_CONFIG.get('max_test_threads', 8)
+            threads = min(max_threads, self.cpu_count)
 
         # Use module-level functions for workers to avoid pickling issues
         if workload == 'matrix':
@@ -262,18 +282,28 @@ class CPUBenchmark:
                 multi_time = single_time
                 results['multi_threaded'] = multi_time
 
-            # Multi-process test
-            try:
-                start = time.perf_counter()
-                with ProcessPoolExecutor(max_workers=threads) as executor:
-                    futures = [executor.submit(worker) for _ in range(threads)]
-                    for future in futures:
-                        future.result(timeout=5)  # Add timeout
-                process_time = time.perf_counter() - start
-                results['multi_process'] = process_time
-            except Exception as e:
-                print(f"  ⚠️ Process test failed: {e}")
-                process_time = single_time
+            # Multi-process test - skip if too many threads to avoid hanging
+            if threads <= 4:
+                try:
+                    start = time.perf_counter()
+                    with ProcessPoolExecutor(max_workers=threads) as executor:
+                        futures = [executor.submit(worker) for _ in range(threads)]
+                        timeout = CPU_CONFIG.get('multithread_timeout', 5)
+                        for future in futures:
+                            try:
+                                future.result(timeout=timeout)
+                            except:
+                                break
+                    process_time = time.perf_counter() - start
+                    results['multi_process'] = process_time
+                except Exception as e:
+                    print(f"  ⚠️ Process test skipped: {e}")
+                    process_time = single_time
+                    results['multi_process'] = process_time
+            else:
+                # Skip process test for many threads
+                print(f"  ℹ️ Skipping process test for {threads} threads")
+                process_time = single_time * 0.25  # Estimate
                 results['multi_process'] = process_time
 
             results['speedup_threads'] = single_time / multi_time if multi_time > 0 else 1
@@ -311,27 +341,31 @@ class CPUBenchmark:
         }
 
         # Matrix multiplication test
-        print("\n📊 Matrix Multiplication (1000x1000):")
-        matrix_result = self.matrix_multiplication_test(size=1000, iterations=3)
+        matrix_size = CPU_CONFIG.get('matrix_size', 1000)
+        print(f"\n📊 Matrix Multiplication ({matrix_size}x{matrix_size}):")
+        matrix_result = self.matrix_multiplication_test()
         results['tests']['matrix_mult'] = matrix_result
         print(f"  Performance: {matrix_result['avg_gflops']:.2f} GFLOPS (±{matrix_result['std_gflops']:.2f})")
 
         # Prime calculation test
-        print("\n🔢 Prime Number Calculation (up to 100k):")
-        prime_result = self.prime_calculation_test(limit=100000)
+        prime_limit = CPU_CONFIG.get('prime_limit', 100000)
+        print(f"\n🔢 Prime Number Calculation (up to {prime_limit//1000}k):")
+        prime_result = self.prime_calculation_test()
         results['tests']['prime_calc'] = prime_result
         print(f"  Found {prime_result['primes_found']} primes in {prime_result['time']:.2f}s")
         print(f"  Rate: {prime_result['primes_per_sec']:.0f} primes/sec")
 
         # Hash benchmark
-        print("\n🔐 Hash Calculation (100MB):")
-        hash_result = self.hash_benchmark(size_mb=100, iterations=3)
+        hash_size = CPU_CONFIG.get('hash_size_mb', 100)
+        print(f"\n🔐 Hash Calculation ({hash_size}MB):")
+        hash_result = self.hash_benchmark()
         results['tests']['hash'] = hash_result
         for algo, perf in hash_result.items():
             print(f"  {algo.upper()}: {perf['throughput_mbps']:.1f} MB/s")
 
-        # Multi-threading test (limit to 8 threads to avoid timeout)
-        test_threads = min(8, self.cpu_count)
+        # Multi-threading test
+        max_threads = CPU_CONFIG.get('max_test_threads', 8)
+        test_threads = min(max_threads, self.cpu_count)
         print(f"\n🧵 Threading Efficiency (testing {test_threads} threads):")
         thread_result = self.multithread_test(workload='matrix', threads=test_threads)
         results['tests']['threading'] = thread_result

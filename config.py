@@ -124,6 +124,58 @@ def validate_system_memory(available_ram: float, available_gpu: float = 0) -> Di
 
     return result
 
+# Performance benchmark configuration
+BENCHMARK_CONFIG = {
+    # Memory benchmark
+    "memory": {
+        "test_sizes_mb": [1, 4, 8],  # Small (cache)
+        "test_sizes_mb_medium": [32, 64, 128],  # Medium (L3/RAM transition)
+        "test_sizes_mb_large": [256, 512, 1024],  # Large (pure RAM)
+        "test_sizes_mb_xlarge": [2048, 4096],  # Extra large
+        "iterations": 3,
+        "min_system_memory_gb": {
+            "medium": 8,
+            "large": 16,
+            "xlarge": 32,
+        }
+    },
+    # CPU benchmark
+    "cpu": {
+        "matrix_size": 1000,  # Matrix multiplication size
+        "matrix_size_multithread": 300,  # Smaller for multithread test
+        "matrix_iterations": 3,
+        "prime_limit": 100000,  # Prime calculation upper limit
+        "prime_range_multithread": (10000, 15000),  # Range for multithread test
+        "hash_size_mb": 100,
+        "hash_iterations": 3,
+        "max_test_threads": 4,  # Limit threads to avoid timeout
+        "multithread_timeout": 5,  # Seconds
+    },
+    # Storage benchmark
+    "storage": {
+        "sequential_size_mb": 512,  # Sequential read test size
+        "sequential_block_kb": 4096,
+        "random_file_size_mb": 50,
+        "random_read_count": 500,
+        "random_block_kb": 4,
+        "shard_size_mb": 450,  # Model shard simulation (reduced from 4.5GB)
+        "num_shards": 3,
+        "min_free_space_gb": 10,
+    },
+    # Performance scoring thresholds
+    "scoring": {
+        "ram_bandwidth_excellent": 50,  # GB/s
+        "ram_bandwidth_good": 30,
+        "ram_bandwidth_moderate": 20,
+        "cpu_gflops_excellent": 100,
+        "cpu_gflops_good": 50,
+        "cpu_gflops_moderate": 20,
+        "storage_mbps_excellent": 1000,
+        "storage_mbps_good": 500,
+        "storage_mbps_moderate": 100,
+    }
+}
+
 # Export key constants
 __all__ = [
     'MODEL_NAME',
@@ -132,6 +184,7 @@ __all__ = [
     'PERFORMANCE',
     'SYSTEM_THRESHOLDS',
     'FILE_SAFETY',
+    'BENCHMARK_CONFIG',
     'get_memory_requirement',
     'get_cache_path',
     'validate_system_memory'

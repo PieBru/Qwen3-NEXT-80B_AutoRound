@@ -14,6 +14,14 @@ from typing import Dict, List, Optional, Tuple
 import random
 import string
 
+# Import configuration
+try:
+    from config import BENCHMARK_CONFIG
+    STORAGE_CONFIG = BENCHMARK_CONFIG.get('storage', {})
+except ImportError:
+    # Fallback if config not available
+    STORAGE_CONFIG = {}
+
 
 class StorageBenchmark:
     """Storage I/O performance testing utilities"""
@@ -47,7 +55,8 @@ class StorageBenchmark:
         for name, path in list(locations.items()):
             try:
                 stat = shutil.disk_usage(path)
-                if stat.free < 10 * 1024**3:  # Less than 10GB free
+                min_free = STORAGE_CONFIG.get('min_free_space_gb', 10)
+                if stat.free < min_free * 1024**3:
                     print(f"⚠️ {name} has limited space: {stat.free / 1024**3:.1f}GB free")
             except:
                 pass
@@ -86,8 +95,12 @@ class StorageBenchmark:
 
         return 'Unknown'
 
-    def sequential_read_test(self, location: Path, size_mb: int = 1024,
-                           block_size_kb: int = 4096) -> Dict[str, float]:
+    def sequential_read_test(self, location: Path, size_mb: int = None,
+                           block_size_kb: int = None) -> Dict[str, float]:
+        if size_mb is None:
+            size_mb = STORAGE_CONFIG.get('sequential_size_mb', 1024)
+        if block_size_kb is None:
+            block_size_kb = STORAGE_CONFIG.get('sequential_block_kb', 4096)
         """Test sequential read performance"""
         results = {
             'location': str(location),
@@ -169,8 +182,14 @@ class StorageBenchmark:
 
         return results
 
-    def random_read_test(self, location: Path, file_size_mb: int = 100,
-                        read_count: int = 1000, block_size_kb: int = 4) -> Dict[str, float]:
+    def random_read_test(self, location: Path, file_size_mb: int = None,
+                        read_count: int = None, block_size_kb: int = None) -> Dict[str, float]:
+        if file_size_mb is None:
+            file_size_mb = STORAGE_CONFIG.get('random_file_size_mb', 100)
+        if read_count is None:
+            read_count = STORAGE_CONFIG.get('random_read_count', 1000)
+        if block_size_kb is None:
+            block_size_kb = STORAGE_CONFIG.get('random_block_kb', 4)
         """Test random read IOPS"""
         results = {
             'location': str(location),
@@ -220,9 +239,9 @@ class StorageBenchmark:
 
     def model_shard_simulation(self, location: Path) -> Dict[str, float]:
         """Simulate reading model shards (4.5GB chunks)"""
-        # Use smaller size for testing (450MB instead of 4.5GB)
-        shard_size_mb = 450  # Reduced for faster testing
-        num_shards = 3
+        # Use configured sizes for testing
+        shard_size_mb = STORAGE_CONFIG.get('shard_size_mb', 450)
+        num_shards = STORAGE_CONFIG.get('num_shards', 3)
 
         results = {
             'location': str(location),
@@ -237,10 +256,11 @@ class StorageBenchmark:
         total_start = time.perf_counter()
 
         for i in range(num_shards):
+            # Use larger blocks for model loading simulation
             shard_result = self.sequential_read_test(
                 location,
                 size_mb=shard_size_mb,
-                block_size_kb=8192  # Larger blocks for model loading
+                block_size_kb=8192
             )
             if 'read_mbps' in shard_result:
                 shard_times.append(shard_result['read_time'])
@@ -273,13 +293,13 @@ class StorageBenchmark:
 
             location_results = {}
 
-            # Sequential read test (smaller size for speed)
-            seq_result = self.sequential_read_test(loc_path, size_mb=512, block_size_kb=4096)
+            # Sequential read test
+            seq_result = self.sequential_read_test(loc_path)
             location_results['sequential'] = seq_result
 
             # Random read IOPS test
             print(f"  Testing random read IOPS...", end='', flush=True)
-            iops_result = self.random_read_test(loc_path, file_size_mb=50, read_count=500)
+            iops_result = self.random_read_test(loc_path)
             location_results['random'] = iops_result
             if 'iops' in iops_result:
                 print(f" ✓ ({iops_result['iops']:.0f} IOPS)")

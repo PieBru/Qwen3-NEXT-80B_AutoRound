@@ -1143,14 +1143,29 @@ def run_performance_tests(args) -> int:
         ram_bw = results['memory'].get('analysis', {}).get('ram_bandwidth', 20)
         cpu_gflops = results['cpu'].get('tests', {}).get('matrix_mult', {}).get('avg_gflops', 50)
 
+        # Use config thresholds if available
+        try:
+            from config import BENCHMARK_CONFIG
+            scoring = BENCHMARK_CONFIG.get('scoring', {})
+            bw_excellent = scoring.get('ram_bandwidth_excellent', 50)
+            bw_good = scoring.get('ram_bandwidth_good', 30)
+            bw_moderate = scoring.get('ram_bandwidth_moderate', 20)
+            cpu_excellent = scoring.get('cpu_gflops_excellent', 100)
+            cpu_good = scoring.get('cpu_gflops_good', 50)
+            cpu_moderate = scoring.get('cpu_gflops_moderate', 20)
+        except:
+            # Fallback values
+            bw_excellent, bw_good, bw_moderate = 50, 30, 20
+            cpu_excellent, cpu_good, cpu_moderate = 100, 50, 20
+
         # Simple heuristic predictions
-        if ram_bw > 50 and cpu_gflops > 100:
+        if ram_bw > bw_excellent and cpu_gflops > cpu_excellent:
             perf_level = "Excellent"
             tokens_estimate = "2-4"
-        elif ram_bw > 30 and cpu_gflops > 50:
+        elif ram_bw > bw_good and cpu_gflops > cpu_good:
             perf_level = "Good"
             tokens_estimate = "1-2"
-        elif ram_bw > 20 and cpu_gflops > 20:
+        elif ram_bw > bw_moderate and cpu_gflops > cpu_moderate:
             perf_level = "Moderate"
             tokens_estimate = "0.5-1"
         else:
