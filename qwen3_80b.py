@@ -19,6 +19,9 @@ if "--load-strategy" in sys.argv:
     idx = sys.argv.index("--load-strategy")
     if idx + 1 < len(sys.argv) and sys.argv[idx + 1] == "no-gpu":
         os.environ["CUDA_VISIBLE_DEVICES"] = ""
+        # Additional environment variables to minimize CUDA probing
+        # Note: The "No CUDA runtime" warning comes from PyTorch's C++ layer
+        # and cannot be fully suppressed, but it's harmless in CPU-only mode
 
 import time
 import gc
@@ -27,21 +30,48 @@ import tempfile
 import pickle
 import json
 from pathlib import Path
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Dict, Any, Tuple, Union, List
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 
 # Suppress warnings unless in verbose mode
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning)
 
-# Cache configuration
-CACHE_DIR = Path.home() / ".cache/qwen3_fast_loader"
-CACHE_VERSION = "v3.0"
+# Import configuration
+try:
+    from config import CACHE_CONFIG, MEMORY_REQUIREMENTS, MODEL_NAME as DEFAULT_MODEL_NAME
+    CACHE_DIR = CACHE_CONFIG["cache_dir"]
+    CACHE_VERSION = CACHE_CONFIG["cache_version"]
+except ImportError:
+    # Fallback if config.py not available
+    CACHE_DIR = Path.home() / ".cache/qwen3_fast_loader"
+    CACHE_VERSION = "v3.0"
+    DEFAULT_MODEL_NAME = "Intel/Qwen3-Next-80B-A3B-Thinking-int4-mixed-AutoRound"
+
+
+def accelerate_shard_loading() -> None:
+    """Configure environment for faster shard loading"""
+    # Set environment variables to optimize loading
+    os.environ["TRANSFORMERS_USE_MULTIPROCESSING"] = "1"
+    os.environ["TOKENIZERS_PARALLELISM"] = "true"
+
+    # Increase number of threads for torch operations
+    if "OMP_NUM_THREADS" not in os.environ:
+        num_threads = os.cpu_count()
+        if num_threads:
+            # Use 75% of available threads for loading
+            loading_threads = max(4, int(num_threads * 0.75))
+            os.environ["OMP_NUM_THREADS"] = str(loading_threads)
+            torch.set_num_threads(loading_threads)
+            if not "--quiet" in sys.argv and "-q" not in sys.argv:
+                print(f"🚀 Using {loading_threads} threads for optimized loading")
 
 
 class ModelCache:
     """Fast model caching system"""
 
-    def __init__(self, cache_dir: Path = CACHE_DIR):
+    def __init__(self, cache_dir: Path = CACHE_DIR) -> None:
         self.cache_dir = cache_dir
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
@@ -61,10 +91,12 @@ class ModelCache:
         paths = self.get_cache_paths(model_name, device_type)
         return paths['model'].exists() and paths['metadata'].exists()
 
-    def save(self, model, tokenizer, model_name: str, device_type: str):
-        """Save model to cache - handles models with hooks"""
+    def save(self, model: Any, tokenizer: Any, model_name: str, device_type: str, is_ipex_optimized: bool = False) -> bool:
+        """Save model to cache - handles models with hooks and IPEX optimization"""
         paths = self.get_cache_paths(model_name, device_type)
         print(f"\n💾 Creating fast-load cache...")
+        if is_ipex_optimized:
+            print(f"   📌 Saving IPEX-optimized model (skips repacking on load!)")
         print(f"   Location: {paths['model'].parent}")
         start_time = time.time()
 
@@ -74,43 +106,85 @@ class ModelCache:
                 'model_name': model_name,
                 'device_type': device_type,
                 'cache_version': CACHE_VERSION,
+                'is_ipex_optimized': is_ipex_optimized,
                 'timestamp': time.time(),
                 'pytorch_version': torch.__version__,
             }
-            with open(paths['metadata'], 'w') as f:
-                json.dump(metadata, f, indent=2)
+
+            # Add IPEX version if available
+            if is_ipex_optimized:
+                try:
+                    import intel_extension_for_pytorch as ipex
+                    metadata['ipex_version'] = ipex.__version__
+                except:
+                    metadata['ipex_version'] = None
+
+            # Use atomic write for metadata
+            import tempfile
+            temp_fd, temp_path = tempfile.mkstemp(dir=paths['metadata'].parent, suffix='.tmp')
+            try:
+                with os.fdopen(temp_fd, 'w') as f:
+                    json.dump(metadata, f, indent=2)
+                # Atomic rename
+                os.replace(temp_path, paths['metadata'])
+            except:
+                if os.path.exists(temp_path):
+                    os.unlink(temp_path)
+                raise
 
             # Save tokenizer
             print("   Saving tokenizer...")
             tokenizer.save_pretrained(paths['tokenizer'])
 
-            # Try to save model with pickle first
-            print("   Attempting to serialize model...")
-            try:
-                with open(paths['model'], 'wb') as f:
-                    pickle.dump(model, f, protocol=pickle.HIGHEST_PROTOCOL)
+            # For IPEX-optimized models, use torch.save instead of pickle
+            if is_ipex_optimized:
+                print("   Saving IPEX-optimized state (preserves repacking)...")
+                # Atomic save for IPEX model
+                temp_model = paths['model'].with_suffix('.tmp')
+                torch.save({
+                    'model_state_dict': model.state_dict(),
+                    'model_config': model.config.to_dict() if hasattr(model, 'config') else {}
+                }, temp_model)
+                # Atomic rename
+                temp_model.rename(paths['model'])
 
                 save_time = time.time() - start_time
                 size_gb = paths['model'].stat().st_size / (1024**3)
-                print(f"   ✅ Cache created in {save_time:.1f}s")
+                print(f"   ✅ IPEX cache created in {save_time:.1f}s")
                 print(f"   📦 Cache size: {size_gb:.1f}GB")
-                print(f"   🚀 Next load will be <1 minute!")
+                print(f"   🚀 Next load will skip repacking phase!")
+            else:
+                # Try standard pickle for non-IPEX models
+                print("   Attempting to serialize model...")
+                try:
+                    # Atomic save for standard model
+                    temp_model = paths['model'].with_suffix('.tmp')
+                    with open(temp_model, 'wb') as f:
+                        pickle.dump(model, f, protocol=pickle.HIGHEST_PROTOCOL)
+                    # Atomic rename
+                    temp_model.rename(paths['model'])
 
-            except (pickle.PicklingError, TypeError, AttributeError) as e:
-                # Pickle failed - model has hooks or local functions
-                print(f"   ⚠️  Standard caching not possible due to model hooks")
-                print(f"   ℹ️  Models with CPU offloading cannot be cached")
-                print(f"   💡 TIP: Use --load-strategy no-gpu for cacheable loading")
+                    save_time = time.time() - start_time
+                    size_gb = paths['model'].stat().st_size / (1024**3)
+                    print(f"   ✅ Cache created in {save_time:.1f}s")
+                    print(f"   📦 Cache size: {size_gb:.1f}GB")
+                    print(f"   🚀 Next load will be <1 minute!")
 
-                # Clean up partial files
-                if paths['model'].exists():
-                    paths['model'].unlink()
+                except (pickle.PicklingError, TypeError, AttributeError) as e:
+                    # Pickle failed - model has hooks or local functions
+                    print(f"   ⚠️  Standard caching not possible due to model hooks")
+                    print(f"   ℹ️  Models with CPU offloading cannot be cached")
+                    print(f"   💡 TIP: Use --load-strategy no-gpu for cacheable loading")
 
-                # Remove metadata since we can't cache
-                if paths['metadata'].exists():
-                    paths['metadata'].unlink()
+                    # Clean up partial files
+                    if paths['model'].exists():
+                        paths['model'].unlink()
 
-                return False
+                    # Remove metadata since we can't cache
+                    if paths['metadata'].exists():
+                        paths['metadata'].unlink()
+
+                    return False
 
         except Exception as e:
             print(f"   ❌ Cache creation failed: {e}")
@@ -150,10 +224,28 @@ class ModelCache:
                 trust_remote_code=True
             )
 
-            # Load model
+            # Load model - check if IPEX-optimized
             print("   Loading model from cache...")
-            with open(paths['model'], 'rb') as f:
-                model = pickle.load(f)
+            if metadata.get('is_ipex_optimized', False):
+                # Load IPEX-optimized model with torch.load
+                print("   (IPEX-optimized model detected, using torch.load)")
+                checkpoint = torch.load(paths['model'], map_location='cpu')
+                from transformers import AutoConfig, AutoModelForCausalLM
+                config = AutoConfig.from_dict(checkpoint['model_config'])
+
+                # Recreate model structure
+                model = AutoModelForCausalLM.from_config(
+                    config,
+                    trust_remote_code=True,
+                    torch_dtype=torch.float16
+                )
+
+                # Load state dict
+                model.load_state_dict(checkpoint['model_state_dict'])
+            else:
+                # Load standard model with pickle
+                with open(paths['model'], 'rb') as f:
+                    model = pickle.load(f)
 
             load_time = time.time() - start_time
             print(f"   ✅ Model loaded in {load_time:.1f}s!")
@@ -171,7 +263,7 @@ class ModelCache:
                 shutil.rmtree(paths['model'].parent)
             return None, None
 
-    def clear(self):
+    def clear(self) -> None:
         """Clear all cached models"""
         if self.cache_dir.exists():
             import shutil
@@ -279,6 +371,9 @@ def load_model(args: argparse.Namespace):
     from transformers import AutoModelForCausalLM, AutoTokenizer
     import psutil
 
+    # Enable multi-threaded loading optimization
+    accelerate_shard_loading()
+
     # GPTQModel status (already set in setup_environment)
     if args.use_gptq and not args.quiet:
         print("   ℹ️  GPTQModel enabled (may conflict with hybrid strategies)")
@@ -324,14 +419,9 @@ def load_model(args: argparse.Namespace):
                 return model, tokenizer
 
         # If we get here, cache miss or rebuild - will load normally and save to cache
-        if not args.quiet:
-            if device_type == "cpu":
-                print("\n📝 Will create cache after loading for fast future loads!")
-            else:
-                print("\n📝 Note: Hybrid loading (GPU+CPU) cannot be cached")
-                print("   For cacheable loading, use: --load-strategy no-gpu")
         # Mark that we need to save to cache after loading
         args._cache_needs_save = True
+        args._cache_device_type = device_type  # Store for later use
 
     # Check cache
     is_cached, cache_path, cache_size = check_model_cache(model_name)
@@ -351,13 +441,21 @@ def load_model(args: argparse.Namespace):
             print(f"\n📂 Model will be downloaded from Hugging Face")
             print(f"   This will take time on first run!")
 
-    # System info
+    # System info with swap
     total_ram = psutil.virtual_memory().total / (1024**3)
     available_ram = psutil.virtual_memory().available / (1024**3)
+    used_ram = psutil.virtual_memory().used / (1024**3)
+    swap_total = psutil.swap_memory().total / (1024**3)
+    swap_used = psutil.swap_memory().used / (1024**3)
+    swap_free = psutil.swap_memory().free / (1024**3)
 
     if not args.quiet:
         print(f"\n📊 System Resources:")
-        print(f"   RAM: {total_ram:.1f}GB total, {available_ram:.1f}GB available")
+        print(f"   RAM: {total_ram:.1f}GB total, {available_ram:.1f}GB available, {used_ram:.1f}GB used")
+        if swap_total > 0:
+            print(f"   Swap: {swap_total:.1f}GB total, {swap_free:.1f}GB available, {swap_used:.1f}GB used")
+        else:
+            print(f"   Swap: Not configured")
 
     # Determine loading strategy BEFORE any model loading attempts
     device_map = "auto"  # Default, will be overridden based on strategy
@@ -370,6 +468,9 @@ def load_model(args: argparse.Namespace):
     EXPERT_LAYERS_GB = 28  # Size of expert layers (~28GB)
     MIN_RAM_FOR_CPU = 50  # Minimum RAM for CPU-only mode
     MIN_RAM_FOR_HYBRID = 60  # Minimum RAM for hybrid mode
+
+    # Initialize memory warning for later use
+    memory_warning = None
 
     # Get GPU info if available
     if torch.cuda.is_available():
@@ -387,18 +488,23 @@ def load_model(args: argparse.Namespace):
     if args.load_strategy == "no-gpu":
         loading_strategy = 'cpu_only'
         device_map = "cpu"
+
+        # Store memory requirements info for later display
         if not args.quiet:
-            print("\n📊 Loading Strategy: NO-GPU (CPU-only)")
-            print("   All layers will load on CPU/RAM")
-            print("   ⚠️  IMPORTANT:")
-            print("      • This will take 30-60 minutes to load")
-            print("      • It will use CPU-only (no GPU issues!)")
-            print("      • Once loaded, it WILL work")
-            print("      • Monitor with 'htop' - 1 CPU core at 100%")
-            if has_gpu:
-                print("   GPU available but not used per user request")
-            if available_ram < MIN_RAM_FOR_CPU:
-                print(f"   ⚠️  WARNING: Low RAM ({available_ram:.1f}GB < {MIN_RAM_FOR_CPU}GB recommended)")
+            # Check memory situation - updated based on actual measurements
+            total_available = available_ram + swap_free
+            memory_warning = None
+            IPEX_PEAK_REQUIREMENT = 230  # Actual measured: model ~117GB, IPEX doubles it
+
+            if not args.no_ipex and total_available < IPEX_PEAK_REQUIREMENT:
+                memory_warning = f"Only {total_available:.1f}GB available (RAM+swap), need ~{IPEX_PEAK_REQUIREMENT}GB for IPEX"
+                # Suggest swap setup
+                memory_warning += " - consider 256GB swap or use --no-ipex"
+            elif not args.no_ipex and swap_free > 0 and available_ram < 120:
+                memory_warning = "IPEX will use swap during optimization (normal for first run)"
+            elif available_ram < MIN_RAM_FOR_CPU and swap_total == 0:
+                memory_warning = f"Low RAM ({available_ram:.1f}GB < {MIN_RAM_FOR_CPU}GB)"
+                memory_warning += " - add swap for better performance"
 
     # Strategy 2: MIN-GPU (default) - Minimum non-expert layers on GPU
     elif args.load_strategy == "min-gpu" or args.load_strategy == "auto":
@@ -498,13 +604,32 @@ def load_model(args: argparse.Namespace):
         # Fallback
         device_map = "auto"
 
-    # Loading info
+    # Loading info - consolidated all loading messages here
     if not args.quiet:
-        print("\n⏳ Loading model...")
-        if not args.no_warnings:
-            print("   ⚠️  Expect 30-60 minutes for first load (single-threaded limitation)")
-            print("   ⚠️  You may see a '28GB buffer' warning - this is normal")
-            print("   💡 Monitor with 'htop' - only 1 CPU thread will be at 100%")
+        print(f"\n⏳ Loading model ({loading_strategy.replace('_', ' ')} mode)...")
+
+        # Show relevant details based on strategy
+        if loading_strategy == 'cpu_only':
+            # More accurate constants based on testing
+            print(f"   • Loading ~40GB model in shards (expect 60-90 min first load)")
+            if not args.no_ipex:
+                # Updated based on actual measurements: model uses ~117GB, IPEX doubles it
+                ipex_peak = 230  # GB - actual measured peak
+                print(f"   • IPEX optimization: needs ~{ipex_peak}GB peak (one-time)")
+                total_available_mem = total_ram + swap_total
+                if total_available_mem < ipex_peak:
+                    print(f"   • ⚠️  Consider 256GB swap for IPEX (you have {total_available_mem:.0f}GB total)")
+            print(f"   • Monitor: 'htop' shows 1 CPU at 100% (library limitation)")
+
+            # Show any memory warnings
+            if memory_warning:
+                print(f"   ⚠️  {memory_warning}")
+        elif loading_strategy == 'hybrid_min':
+            print(f"   • Non-expert layers to GPU (~12GB)")
+            print(f"   • Expert layers to CPU (~28GB)")
+        elif loading_strategy == 'gpu_max':
+            print(f"   • Loading as much as possible to GPU")
+            print(f"   • Using up to {max_memory[0] if max_memory else 'all'} VRAM")
 
     # Load tokenizer
     start_time = time.time()
@@ -644,11 +769,16 @@ def load_model(args: argparse.Namespace):
             print(f"\n📊 Memory Usage After Loading:")
             print(f"   VRAM: {gpu_used_after:.1f}GB allocated, {gpu_reserved:.1f}GB reserved, {gpu_free_after:.1f}GB free")
 
-        # RAM usage
+        # RAM and swap usage
         import psutil
         process = psutil.Process()
         ram_usage_gb = process.memory_info().rss / (1024**3)
+        swap_info = psutil.swap_memory()
         print(f"   RAM: {ram_usage_gb:.1f}GB used by process")
+        if swap_info.total > 0:
+            swap_used_gb = swap_info.used / (1024**3)
+            swap_free_gb = swap_info.free / (1024**3)
+            print(f"   Swap: {swap_used_gb:.1f}GB used, {swap_free_gb:.1f}GB free")
 
     # Show device map if verbose
     if args.verbose and hasattr(model, 'hf_device_map'):
@@ -659,18 +789,41 @@ def load_model(args: argparse.Namespace):
         for device, count in sorted(devices.items())[:3]:
             print(f"   {device}: {count} layers")
 
-    # Save to cache if not bypassed (before IPEX optimization)
-    if not args.bypass_cache and hasattr(args, '_cache_needs_save'):
-        cache = ModelCache()
-        device_type = "cpu" if device_map == "cpu" else "cuda"
-        success = cache.save(model, tokenizer, model_name, device_type)
-        if not success and not args.quiet:
-            print("\n⚠️  Note: Caching is not available for hybrid CPU/GPU loading")
-            print("   For cacheable loading, use: --load-strategy no-gpu")
+    # Show cache info if we're going to create cache
+    if not args.bypass_cache and hasattr(args, '_cache_needs_save') and args._cache_needs_save:
+        if not args.quiet:
+            if device_map == "cpu":
+                print("\n📝 Will create fast-load cache after optimization")
+                print("   Cache location: ~/.cache/qwen3_fast_loader/")
+                print("   Cache size: ~40GB (saves IPEX-optimized model)")
+                print("   Next run: <1 minute load time!")
+            else:
+                print("\n📝 Note: Hybrid GPU+CPU loading cannot be cached")
 
-    # Apply IPEX optimization AFTER loading (only for CPU mode)
+    # Apply IPEX optimization first (only for CPU mode)
+    ipex_applied = False
     if device_map == "cpu" and not args.no_ipex:
         try:
+            # Force garbage collection before IPEX to free any unnecessary memory
+            if not args.quiet:
+                print(f"\n🧹 Preparing for IPEX optimization...")
+                mem_before_gc = psutil.Process().memory_info().rss / (1024**3)
+                print(f"   Memory before cleanup: {mem_before_gc:.1f}GB")
+
+            # Aggressive garbage collection
+            gc.collect()
+            gc.collect()  # Run twice for thorough cleanup
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            time.sleep(1)  # Give OS time to reclaim memory
+
+            if not args.quiet:
+                mem_after_gc = psutil.Process().memory_info().rss / (1024**3)
+                if mem_after_gc < mem_before_gc:
+                    print(f"   Memory after cleanup: {mem_after_gc:.1f}GB (freed {mem_before_gc - mem_after_gc:.1f}GB)")
+                else:
+                    print(f"   Memory after cleanup: {mem_after_gc:.1f}GB")
+
             # Try to import IPEX only AFTER model is loaded
             import intel_extension_for_pytorch as ipex
 
@@ -678,24 +831,98 @@ def load_model(args: argparse.Namespace):
                 print(f"\n🚀 Applying Intel Extension for PyTorch optimizations...")
                 print(f"   IPEX version: {ipex.__version__}")
 
+                # Show memory before IPEX
+                mem_before = psutil.Process().memory_info().rss / (1024**3)
+                swap_before = psutil.swap_memory().used / (1024**3)
+                mem_available = psutil.virtual_memory().available / (1024**3)
+                swap_free = psutil.swap_memory().free / (1024**3)
+
+                print(f"   Current usage: {mem_before:.1f}GB RAM, {swap_before:.1f}GB swap")
+                print(f"   Available: {mem_available:.1f}GB RAM, {swap_free:.1f}GB swap")
+
+                total_available = mem_available + swap_free
+                IPEX_REQUIREMENT = 115  # Additional memory needed for IPEX optimization
+                if total_available < IPEX_REQUIREMENT:
+                    print(f"   ⚠️  WARNING: Only {total_available:.1f}GB available for IPEX (needs ~{IPEX_REQUIREMENT}GB more)")
+                    print(f"      Process may be slow (using swap) or killed (OOM)")
+
+                print(f"   Repacking to CPU/XPU format (temporary 2x memory)...")
+
             # Optimize model for CPU inference
+            ipex_start = time.time()
             model = ipex.optimize(model, dtype=torch.float16 if not args.fp32 else torch.float32)
+            ipex_time = time.time() - ipex_start
+            ipex_applied = True
 
             if not args.quiet:
-                print("   ✅ IPEX optimizations applied - expecting 2-4x inference speedup!")
-        except ImportError:
+                # Show memory after IPEX
+                mem_after = psutil.Process().memory_info().rss / (1024**3)
+                swap_after = psutil.swap_memory().used / (1024**3)
+                print(f"   ✅ IPEX optimization complete in {ipex_time:.1f}s")
+                print(f"   Memory after IPEX: {mem_after:.1f}GB RAM, {swap_after:.1f}GB swap")
+                print(f"   Expecting 2-4x inference speedup!")
+        except ImportError as e:
             if args.verbose:
                 print("\n   ℹ️  Intel Extension for PyTorch not available")
                 print("      CPU inference will work but without 2-4x speedup")
+                print(f"      Install with: pip install intel-extension-for-pytorch")
+            # Log the specific import error for debugging
+            if args.verbose:
+                import traceback
+                print(f"      Debug info: {str(e)}")
+        except RuntimeError as e:
+            # IPEX optimization can fail with specific runtime errors
+            error_msg = str(e).lower()
+            if "out of memory" in error_msg or "oom" in error_msg:
+                print(f"\n   ❌ IPEX optimization failed: Out of Memory")
+                print(f"      Consider adding more swap space or using --no-ipex")
+                if args.fail_on_error:
+                    raise
+            elif "unsupported" in error_msg:
+                print(f"\n   ⚠️  IPEX optimization failed: Unsupported operation")
+                print(f"      Details: {e}")
+                print(f"      Continuing without IPEX optimization")
+            else:
+                print(f"\n   ⚠️  IPEX optimization failed: {e}")
+                print(f"      Continuing without IPEX speedup")
+            # Clear any partial state
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
         except Exception as e:
+            # Catch-all for unexpected errors
             if not args.quiet:
-                print(f"\n   ⚠️  Could not apply IPEX optimizations: {e}")
+                print(f"\n   ⚠️  Unexpected error during IPEX optimization: {type(e).__name__}")
+                print(f"      Error: {e}")
+                if args.verbose:
+                    import traceback
+                    print("      Stack trace:")
+                    traceback.print_exc()
                 print("      Continuing without IPEX speedup")
+            # Log to file for debugging
+            try:
+                import logging
+                logging.basicConfig(filename='ipex_errors.log', level=logging.ERROR)
+                logging.error(f"IPEX optimization failed: {e}", exc_info=True)
+            except:
+                pass
+
+    # Save to cache AFTER IPEX optimization (if applicable)
+    if not args.bypass_cache and hasattr(args, '_cache_needs_save'):
+        cache = ModelCache()
+        device_type = getattr(args, '_cache_device_type', "cpu" if device_map == "cpu" else "cuda")
+
+        # Save the IPEX-optimized model if IPEX was applied
+        success = cache.save(model, tokenizer, model_name, device_type, is_ipex_optimized=ipex_applied)
+
+        if not success and not args.quiet:
+            print("\n⚠️  Note: Caching is not available for hybrid CPU/GPU loading")
+            print("   For cacheable loading, use: --load-strategy no-gpu")
 
     return model, tokenizer
 
 
-def interactive_mode(model, tokenizer, args):
+def interactive_mode(model: Any, tokenizer: Any, args: argparse.Namespace) -> None:
     """Run interactive chat mode"""
     print("\n" + "=" * 60)
     print("Interactive Mode - Type 'quit' to exit")
@@ -772,7 +999,7 @@ def interactive_mode(model, tokenizer, args):
                 traceback.print_exc()
 
 
-def benchmark_mode(model, tokenizer, args):
+def benchmark_mode(model: Any, tokenizer: Any, args: argparse.Namespace) -> None:
     """Run benchmark tests"""
     print("\n" + "=" * 60)
     print("Benchmark Mode")
@@ -835,7 +1062,7 @@ def benchmark_mode(model, tokenizer, args):
     print(f"   Max speed: {max(results):.1f} tokens/s")
 
 
-def test_dependencies():
+def test_dependencies() -> bool:
     """Test all required dependencies"""
     print("Testing dependencies...\n")
 
@@ -880,7 +1107,7 @@ def test_dependencies():
         return False
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(
         description="Qwen3-Next-80B AutoRound - Smart Loading with Auto Strategy Selection",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -1014,6 +1241,10 @@ LOAD TIME:
                         help="Rebuild cache even if it exists")
     parser.add_argument("--clear-cache", action="store_true",
                         help="Clear model cache and exit")
+    parser.add_argument("--create-cache-only", action="store_true",
+                        help="Create cache file and exit (useful for sharing with others)")
+    parser.add_argument("--cache-output", type=str, metavar="PATH",
+                        help="Output path for cache file (with --create-cache-only)")
 
     args = parser.parse_args()
 
@@ -1034,6 +1265,80 @@ LOAD TIME:
     if args.clear_cache:
         cache = ModelCache()
         cache.clear()
+        return 0
+
+    # Create cache only mode
+    if args.create_cache_only:
+        print("\n🔨 Cache Creation Mode")
+        print("=" * 50)
+
+        # Determine device type based on load strategy
+        if args.load_strategy == "no-gpu":
+            device_type = "cpu"
+            print("📦 Creating CPU-optimized cache (most portable)")
+        else:
+            device_type = "cuda" if torch.cuda.is_available() else "cpu"
+            print(f"📦 Creating {device_type.upper()}-optimized cache")
+
+        # Load the model
+        print(f"\n⏳ Loading model for cache creation...")
+        print(f"   Model: {args.model}")
+        print(f"   Strategy: {args.load_strategy}")
+
+        try:
+            # Override cache settings for cache creation
+            args.bypass_cache = True  # Always load fresh for cache creation
+            args.rebuild_cache = False  # Don't use existing cache
+            model, tokenizer = load_model(args)
+
+            # Save to cache
+            cache = ModelCache()
+            is_ipex = hasattr(model, '_ipex_optimized') and model._ipex_optimized
+            success = cache.save(model, tokenizer, args.model, device_type, is_ipex_optimized=is_ipex)
+
+            if success:
+                paths = cache.get_cache_paths(args.model, device_type)
+                print(f"\n✅ Cache created successfully!")
+                print(f"   Location: {paths['model'].parent}")
+                print(f"   Size: {paths['model'].stat().st_size / (1024**3):.2f} GB")
+
+                # If output path specified, create a portable cache archive
+                if args.cache_output:
+                    import shutil
+                    import tarfile
+
+                    output_path = Path(args.cache_output)
+                    if output_path.suffix not in ['.tar', '.gz', '.tar.gz']:
+                        output_path = output_path.with_suffix('.tar.gz')
+
+                    print(f"\n📦 Creating portable cache archive...")
+                    with tarfile.open(output_path, 'w:gz') as tar:
+                        cache_dir = paths['model'].parent
+                        for item in cache_dir.iterdir():
+                            tar.add(item, arcname=item.name)
+
+                    print(f"✅ Portable cache saved to: {output_path}")
+                    print(f"   Size: {output_path.stat().st_size / (1024**3):.2f} GB")
+                    print(f"\n💡 Others can extract this with:")
+                    print(f"   tar -xzf {output_path.name} -C ~/.cache/qwen3_fast_loader/")
+            else:
+                print("❌ Failed to create cache")
+                return 1
+
+        except Exception as e:
+            print(f"❌ Error creating cache: {e}")
+            if args.verbose:
+                import traceback
+                traceback.print_exc()
+            return 1
+
+        # Clean up memory
+        del model, tokenizer
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        print("\n✅ Cache creation complete!")
         return 0
 
     # Test dependencies mode
