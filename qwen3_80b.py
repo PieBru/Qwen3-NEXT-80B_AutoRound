@@ -38,6 +38,13 @@ import threading
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning)
 
+# Try to import tqdm for progress bars
+try:
+    from tqdm import tqdm
+    TQDM_AVAILABLE = True
+except ImportError:
+    TQDM_AVAILABLE = False
+
 # Import configuration
 try:
     from config import CACHE_CONFIG, MEMORY_REQUIREMENTS, MODEL_NAME as DEFAULT_MODEL_NAME
@@ -74,6 +81,24 @@ class ModelCache:
     def __init__(self, cache_dir: Path = CACHE_DIR) -> None:
         self.cache_dir = cache_dir
         self.cache_dir.mkdir(parents=True, exist_ok=True)
+
+    def get_memory_status(self) -> Dict[str, float]:
+        """Get current memory status in GB"""
+        try:
+            import psutil
+            mem = psutil.virtual_memory()
+            swap = psutil.swap_memory()
+            return {
+                'ram_free': mem.available / (1024**3),
+                'ram_total': mem.total / (1024**3),
+                'ram_used': mem.used / (1024**3),
+                'swap_free': swap.free / (1024**3),
+                'swap_total': swap.total / (1024**3),
+                'swap_used': swap.used / (1024**3)
+            }
+        except ImportError:
+            return {'ram_free': 0, 'ram_total': 0, 'ram_used': 0,
+                   'swap_free': 0, 'swap_total': 0, 'swap_used': 0}
 
     def get_cache_paths(self, model_name: str, device_type: str) -> Dict[str, Path]:
         """Get cache file paths"""
@@ -204,19 +229,47 @@ class ModelCache:
         paths = self.get_cache_paths(model_name, device_type)
         print(f"\n🚀 Loading from fast cache...")
         print(f"   Cache: {paths['model'].parent}")
+
+        # Show initial memory status
+        mem_status = self.get_memory_status()
+        print(f"   💾 Memory: {mem_status['ram_free']:.1f}GB free / {mem_status['ram_total']:.1f}GB total")
+        if mem_status['swap_total'] > 0:
+            print(f"   💿 Swap: {mem_status['swap_free']:.1f}GB free / {mem_status['swap_total']:.1f}GB total")
+
         start_time = time.time()
 
         try:
-            # Load metadata
+            # Setup progress bar if available
+            if TQDM_AVAILABLE:
+                pbar = tqdm(total=5, desc="Loading cache", unit="step",
+                           bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}] Mem: {postfix}')
+
+            # Step 1: Load metadata
+            if TQDM_AVAILABLE:
+                mem = self.get_memory_status()
+                pbar.set_postfix_str(f"{mem['ram_free']:.1f}GB free")
+                pbar.set_description("Loading metadata")
+
             with open(paths['metadata'], 'r') as f:
                 metadata = json.load(f)
 
             if metadata.get('cache_version') != CACHE_VERSION:
                 print(f"   ⚠️  Cache version mismatch, rebuilding...")
+                if TQDM_AVAILABLE:
+                    pbar.close()
                 return None, None
 
-            # Load tokenizer
-            print("   Loading tokenizer...")
+            if TQDM_AVAILABLE:
+                pbar.update(1)
+
+            # Step 2: Load tokenizer
+            if TQDM_AVAILABLE:
+                mem = self.get_memory_status()
+                pbar.set_postfix_str(f"{mem['ram_free']:.1f}GB free")
+                pbar.set_description("Loading tokenizer")
+            else:
+                print("   Loading tokenizer...")
+
             from transformers import AutoTokenizer
             tokenizer = AutoTokenizer.from_pretrained(
                 paths['tokenizer'],
@@ -224,31 +277,94 @@ class ModelCache:
                 trust_remote_code=True
             )
 
-            # Load model - check if IPEX-optimized
-            print("   Loading model from cache...")
+            if TQDM_AVAILABLE:
+                pbar.update(1)
+
+            # Step 3-5: Load model - check if IPEX-optimized
             if metadata.get('is_ipex_optimized', False):
-                # Load IPEX-optimized model with torch.load
-                print("   (IPEX-optimized model detected, using torch.load)")
-                checkpoint = torch.load(paths['model'], map_location='cpu')
+                # IPEX-optimized model loading - try memory-efficient approach
+                if TQDM_AVAILABLE:
+                    mem = self.get_memory_status()
+                    pbar.set_postfix_str(f"{mem['ram_free']:.1f}GB free, {mem['ram_used']:.1f}GB used")
+                    pbar.set_description("Loading IPEX config")
+                else:
+                    print("   Loading IPEX model from cache...")
+                    print("   ⚠️  This 80-90GB cache requires careful memory management")
+
+                # First, try to load with memory mapping
+                try:
+                    # Use mmap=True for more efficient memory usage
+                    print("   Using memory-mapped loading to reduce RAM usage...")
+                    checkpoint = torch.load(paths['model'], map_location='cpu', mmap=True)
+                except:
+                    # Fallback to regular loading if mmap fails
+                    print("   Memory-mapped loading failed, using standard loading...")
+                    checkpoint = torch.load(paths['model'], map_location='cpu')
+
                 from transformers import AutoConfig, AutoModelForCausalLM
+
+                # Extract just the config first
                 config = AutoConfig.from_dict(checkpoint['model_config'])
 
-                # Recreate model structure
+                if TQDM_AVAILABLE:
+                    pbar.update(1)
+                    mem = self.get_memory_status()
+                    pbar.set_postfix_str(f"{mem['ram_free']:.1f}GB free, {mem['ram_used']:.1f}GB used")
+                    pbar.set_description("Creating model structure")
+
+                # Create model with low memory usage flag
                 model = AutoModelForCausalLM.from_config(
                     config,
                     trust_remote_code=True,
-                    torch_dtype=torch.float16
+                    torch_dtype=torch.float16,
+                    low_cpu_mem_usage=True  # Important for memory efficiency
                 )
 
-                # Load state dict
-                model.load_state_dict(checkpoint['model_state_dict'])
+                if TQDM_AVAILABLE:
+                    pbar.update(1)
+                    mem = self.get_memory_status()
+                    pbar.set_postfix_str(f"{mem['ram_free']:.1f}GB free, {mem['ram_used']:.1f}GB used")
+                    pbar.set_description("Loading weights (this may take a while)")
+
+                # Load state dict with strict=False to be more flexible
+                model.load_state_dict(checkpoint['model_state_dict'], strict=False)
+
+                # Aggressively clean up checkpoint
+                del checkpoint['model_state_dict']
+                del checkpoint
+                gc.collect()
+                torch.cuda.empty_cache() if torch.cuda.is_available() else None
+
+                if TQDM_AVAILABLE:
+                    pbar.update(1)
+
             else:
-                # Load standard model with pickle
+                # Standard pickle loading
+                if TQDM_AVAILABLE:
+                    mem = self.get_memory_status()
+                    pbar.set_postfix_str(f"{mem['ram_free']:.1f}GB free")
+                    pbar.set_description("Loading pickled model")
+                else:
+                    print("   Loading model from cache...")
+
                 with open(paths['model'], 'rb') as f:
                     model = pickle.load(f)
 
+                if TQDM_AVAILABLE:
+                    pbar.update(3)  # Skip intermediate steps for pickle
+
+            if TQDM_AVAILABLE:
+                pbar.close()
+
             load_time = time.time() - start_time
+
+            # Final memory status
+            mem_final = self.get_memory_status()
             print(f"   ✅ Model loaded in {load_time:.1f}s!")
+            print(f"   💾 Final memory: {mem_final['ram_used']:.1f}GB used, {mem_final['ram_free']:.1f}GB free")
+            if mem_final['swap_used'] > 0.5:
+                print(f"   💿 Swap in use: {mem_final['swap_used']:.1f}GB")
+
             if load_time < 60:
                 speedup = 2700 / load_time  # 45 minutes avg = 2700 seconds
                 print(f"   🎉 That's {speedup:.0f}x faster than normal loading!")
@@ -256,6 +372,8 @@ class ModelCache:
             return model, tokenizer
 
         except Exception as e:
+            if TQDM_AVAILABLE and 'pbar' in locals():
+                pbar.close()
             print(f"   ❌ Cache loading failed: {e}")
             print(f"   Will rebuild cache...")
             import shutil

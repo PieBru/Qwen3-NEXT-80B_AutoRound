@@ -102,8 +102,11 @@ python qwen3_80b.py --load-strategy no-gpu --interactive
 ## Requirements
 
 ### Hardware Requirements
-- ~64GB free disk space for model (actual size: ~58GB)
-- **For CPU inference**: 50GB+ RAM (80GB for first-time IPEX, or use swap - see [Consumer Guide](#guide-for-consumer-hardware-64-128gb-ram-20gb-vram))
+- **Disk Space**:
+  - ~64GB for original model download
+  - Additional ~90GB for IPEX cache (if using IPEX optimization)
+  - Total: ~150GB free disk space recommended
+- **For CPU inference**: 117GB+ RAM (300GB for first-time IPEX optimization - use swap, see [Consumer Guide](#guide-for-consumer-hardware-64-128gb-ram-20gb-vram))
 - **For GPU inference**: 30GB+ VRAM (or use CPU mode)
 - OPTIONAL: NVIDIA GPU with CUDA 12.1+
 
@@ -313,6 +316,62 @@ python test_cache_performance.py
 
 ## Intel Extension for PyTorch (IPEX) Optimization 🚀
 
+### New: IPEX Cache with Progress & Integrity Checking (v3.5)
+
+The IPEX cache system now includes:
+- **Progress Indicators**: Visual feedback during optimization and saving
+- **SHA256 Checksums**: Automatic integrity verification
+- **Team Sharing**: Export/verify checksums for collaboration
+- **Cache Size**: ~80-90GB (2x larger than original 41GB model due to FP16 expansion)
+
+#### Quick Start with IPEX Cache
+
+```bash
+# First run: Creates IPEX-optimized cache with progress bars
+python qwen3_80b_ipex_cache.py --interactive
+
+# Verify cache integrity
+python qwen3_80b_ipex_cache.py --verify-cache
+
+# Export checksums for team sharing
+python qwen3_80b_ipex_cache.py --export-checksums team_checksums.json
+
+# Force rebuild if corrupted
+python qwen3_80b_ipex_cache.py --rebuild
+```
+
+#### Progress Indicators
+
+Install `tqdm` for visual progress during:
+- Model loading (2 steps)
+- IPEX optimization (real-time progress)
+- Cache saving (4 steps with checksum)
+- Cache loading (6 steps with verification)
+
+```bash
+# Install progress bar support
+uv pip install tqdm
+```
+
+#### Integrity Verification
+
+Every cached model now includes SHA256 checksum:
+- **Automatic**: Verified on every load
+- **Manual Check**: `--verify-cache` command
+- **Team Sharing**: Export/import checksums
+- **Corruption Detection**: Prevents loading corrupted files
+- **File Size**: Cache will be ~80-90GB (2x larger than original)
+
+Example output:
+```
+🚀 Loading IPEX-optimized model from cache...
+   🔍 Verifying file integrity...
+   ✅ Checksum verified: 3f4a2b5c8d9e1f6a...
+   📦 Cache size: 85.3GB
+   ✅ Model loaded in 45.2s!
+   🔒 Integrity verified via SHA256 checksum
+```
+
 ### What is IPEX "Repacking to CPU/XPU Format"?
 
 When you see the message "repacking to CPU/XPU format", IPEX is optimizing the model for CPU execution. This process:
@@ -328,17 +387,20 @@ The repacking occurs when `ipex.optimize()` is called after model loading. This 
 
 ### Memory Requirements During Repacking
 
-⚠️ **Important**: IPEX repacking temporarily requires ~2x model memory!
+⚠️ **Important**: IPEX repacking and cache saving temporarily requires **~300GB total memory**!
 
 | Phase | Memory Usage | Duration |
 |-------|--------------|----------|
-| Model loaded | 40GB | - |
-| IPEX repacking starts | 40GB → 80GB peak | 1-2 minutes |
-| Repacking complete | 40GB (optimized) | - |
+| Model loaded | ~117GB | - |
+| IPEX repacking starts | ~117GB → ~250GB peak | 1-2 minutes |
+| Saving IPEX cache | ~250GB → ~300GB peak | 2-3 minutes |
+| Complete & cached | ~117GB (runtime) | - |
 
 ### Using Temporary Swap for IPEX Optimization
 
-If you have less than 160GB RAM, you'll need **temporary swap space** for the one-time IPEX optimization. The model uses much more memory than expected (~117GB) and IPEX optimization temporarily doubles this.
+**Confirmed Working Configuration**: 128GB RAM + 256GB swap = 384GB total (enough for ~300GB peak)
+
+If you have less than 300GB total memory, you'll need **temporary swap space** for the one-time IPEX optimization. The model uses ~117GB RAM normally, but IPEX optimization and cache saving temporarily peaks at ~300GB.
 
 #### Recommended: Create a Large 256GB Swap File
 
@@ -417,19 +479,24 @@ ls -lh ~/.cache/qwen3_fast_loader/
 
 | Configuration | First Run (with IPEX) | Future Runs (cached) |
 |--------------|----------------------|---------------------|
-| RAM needed | ~117GB | ~117GB |
-| IPEX peak | ~230GB total | N/A (already optimized) |
-| Swap recommended | 256GB | None needed |
-| Total memory | 125GB RAM + 256GB swap = 381GB | Just RAM |
+| RAM needed | ~117GB | ~117GB runtime |
+| IPEX optimization peak | ~250GB total | N/A (already optimized) |
+| Cache saving peak | ~300GB total | N/A (already cached) |
+| Cache loading peak | N/A | ~160GB (temporary) |
+| Swap recommended | 256GB | Small swap helpful |
+| Total memory | 128GB RAM + 256GB swap = 384GB | 160GB RAM ideal |
 
-**Result**: With 125GB RAM + 256GB swap = **381GB total memory**, which is plenty for IPEX optimization that peaks at ~230GB.
+**Confirmed**:
+- **First run**: 128GB RAM + 256GB swap handles the ~300GB peak
+- **Future runs**: ~160GB peak during cache loading, then drops to 117GB runtime
 
 #### Why This Much Swap?
 
-- The quantized model unexpectedly uses **~117GB RAM** (not 40-50GB as initially thought)
-- IPEX optimization temporarily needs **2x the model size** (~230GB peak)
+- The quantized model uses **~117GB RAM** at runtime
+- IPEX optimization peaks at **~250GB total** during repacking
+- Cache saving peaks at **~300GB total** when writing optimized weights
 - 256GB swap ensures the process completes without OOM kills
-- This is a **one-time requirement** - after caching, only RAM is needed
+- This is a **one-time requirement** - after caching, only 117GB RAM is needed
 
 #### Alternative: Skip IPEX If Limited Disk Space
 
@@ -452,18 +519,30 @@ python qwen3_80b.py --load-strategy no-gpu --no-ipex --interactive
 
 ### Our Solution: IPEX-Optimized Caching
 
-We save the model **AFTER** IPEX optimization, so you only need extra RAM once:
+We save the model **AFTER** IPEX optimization, so you only need extra memory once:
 
-**First Run (with caching):**
-1. Load model (40GB RAM) - 30-60 minutes
-2. Apply IPEX optimization (80GB peak) - 1-2 minutes
-3. Save IPEX-optimized cache - 2-3 minutes
-4. Total: ~35-65 minutes, needs 80-100GB RAM
+**First Run (with caching on 128GB RAM system):**
+1. Load model (~117GB RAM) - 30-60 minutes
+2. Apply IPEX optimization (~250GB peak, uses swap) - 1-2 minutes
+3. Save IPEX-optimized cache (~300GB peak, uses swap) - 2-3 minutes
+   - Creates ~80-90GB cache file (2x original 41GB due to FP16 expansion)
+4. Total: ~35-65 minutes, needs 128GB RAM + 256GB swap
 
 **All Future Runs:**
 1. Load IPEX-optimized cache (<1 minute)
+   - ⚠️ **WARNING**: Memory usage during loading can exceed 200GB!
+   - The 80-90GB cache file + model creation = massive memory spike
+   - Memory-mapped loading helps but still requires substantial RAM
+   - After loading completes, drops back to ~117GB runtime memory
 2. No repacking needed!
-3. Ready to use with only 40-50GB RAM
+3. **Recommended**: 200GB+ total memory (RAM + swap) for safe loading
+   - 128GB RAM + 128GB swap should handle it
+   - Monitor with `watch -n1 free -h` during loading
+
+**Why is the cache 2x larger?**
+- Original model: 41GB (4-bit quantized, compressed)
+- IPEX cache: 80-90GB (FP16 expanded, CPU-optimized layout)
+- Trade-off: Larger disk space for 2-4x faster CPU inference
 
 ### IPEX Cache Portability: Who Can "Cook" vs "Eat"
 
@@ -508,9 +587,9 @@ Scenario 3: Cache Sharing
 
 | Configuration | First Run | Subsequent Runs |
 |--------------|-----------|-----------------|
-| Without IPEX | 50GB RAM | 50GB RAM |
-| With IPEX (no cache) | 80-100GB RAM | 80-100GB RAM |
-| **With IPEX + Cache** | **80-100GB RAM** | **40-50GB RAM** |
+| Without IPEX | 117GB RAM | 117GB RAM |
+| With IPEX (no cache) | ~300GB peak (needs swap) | ~300GB peak (needs swap) |
+| **With IPEX + Cache** | **~300GB peak (one-time)** | **~160GB peak loading, 117GB runtime** |
 
 ### IPEX Usage
 
@@ -523,6 +602,21 @@ python qwen3_80b.py --load-strategy no-gpu --no-ipex
 
 # Clear IPEX cache and rebuild
 python qwen3_80b.py --clear-cache --rebuild-cache
+```
+
+### Alternative: Direct IPEX Loading (No Cache)
+
+If you're running into memory issues with the IPEX cache, consider skipping caching:
+
+```bash
+# Use IPEX optimization without caching (slower initial load, less memory spike)
+python qwen3_80b_ipex_cache.py --interactive --no-cache
+
+# This approach:
+# - Takes 30-60 min to load each time
+# - Applies IPEX optimization on-the-fly
+# - Avoids the 200GB+ memory spike during cache loading
+# - Better for systems with exactly 128GB RAM
 ```
 
 The good news: **You only need the extra RAM once!** After the first run, the IPEX-optimized model loads directly from cache without any repacking.
