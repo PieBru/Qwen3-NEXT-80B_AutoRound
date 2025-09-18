@@ -9,9 +9,20 @@ import sys
 from pathlib import Path
 
 def run_command(cmd):
-    """Run a command and return output"""
+    """Run a command and return output safely"""
+    # Validate command is a simple Python script execution
+    if not cmd.startswith("python "):
+        raise ValueError(f"Only Python script execution allowed, got: {cmd}")
+
+    # Check for dangerous shell characters
+    dangerous_chars = [';', '&', '|', '`', '$', '>', '<', '(', ')', '{', '}']
+    if any(char in cmd for char in dangerous_chars):
+        raise ValueError(f"Command contains dangerous characters: {cmd}")
+
     print(f"\n🔧 Running: {cmd}")
-    result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+    # Use list of args instead of shell=True for safety
+    cmd_parts = cmd.split()
+    result = subprocess.run(cmd_parts, capture_output=True, text=True, timeout=30)
     return result
 
 def test_cache_integration():

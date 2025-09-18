@@ -1062,6 +1062,127 @@ def benchmark_mode(model: Any, tokenizer: Any, args: argparse.Namespace) -> None
     print(f"   Max speed: {max(results):.1f} tokens/s")
 
 
+def run_performance_tests(args) -> int:
+    """Run hardware performance tests"""
+    results = {}
+
+    print("\n" + "="*60)
+    print("🚀 HARDWARE PERFORMANCE TESTING")
+    print("="*60)
+
+    # Import benchmark modules
+    try:
+        if args.perf_test or args.test_memory:
+            from memory_benchmark import MemoryBenchmark
+            mem_bench = MemoryBenchmark()
+            print("\n[1/3] Running Memory Tests...")
+            results['memory'] = mem_bench.run_comprehensive_test()
+
+        if args.perf_test or args.test_cpu:
+            from cpu_benchmark import CPUBenchmark
+            cpu_bench = CPUBenchmark()
+            print("\n[2/3] Running CPU Tests...")
+            results['cpu'] = cpu_bench.run_comprehensive_test()
+
+        if args.perf_test or args.test_storage:
+            from storage_benchmark import StorageBenchmark
+            storage_bench = StorageBenchmark()
+            print("\n[3/3] Running Storage Tests...")
+            results['storage'] = storage_bench.run_comprehensive_test()
+
+    except ImportError as e:
+        print(f"❌ Error importing benchmark modules: {e}")
+        print("Make sure memory_benchmark.py, cpu_benchmark.py, and storage_benchmark.py are available")
+        return 1
+
+    # Generate combined report
+    print("\n" + "="*60)
+    print("📊 PERFORMANCE SUMMARY")
+    print("="*60)
+
+    # Memory summary
+    if 'memory' in results:
+        mem = results['memory']
+        if mem.get('analysis', {}).get('ram_bandwidth'):
+            print(f"\n💾 Memory:")
+            print(f"   RAM Bandwidth: {mem['analysis']['ram_bandwidth']:.1f} GB/s")
+            print(f"   System Memory: {mem['system_memory_gb']:.1f} GB")
+
+    # CPU summary
+    if 'cpu' in results:
+        cpu = results['cpu']
+        cpu_info = cpu.get('cpu_info', {})
+        tests = cpu.get('tests', {})
+        print(f"\n🖥️ CPU:")
+        print(f"   Model: {cpu_info.get('model', 'Unknown')[:50]}")
+        print(f"   Cores: {cpu_info.get('physical_cores', 'Unknown')} physical")
+        if 'matrix_mult' in tests:
+            print(f"   Performance: {tests['matrix_mult']['avg_gflops']:.1f} GFLOPS")
+        if cpu_info.get('features'):
+            print(f"   SIMD: {', '.join(cpu_info['features'][:3])}")
+
+    # Storage summary
+    if 'storage' in results:
+        storage = results['storage']
+        summary = storage.get('summary', {})
+        if summary.get('best_location'):
+            print(f"\n💾 Storage:")
+            print(f"   Best Location: {summary['best_location']}")
+            print(f"   Sequential Read: {summary.get('best_speed_mbps', 0):.1f} MB/s")
+
+        if 'model_simulation' in storage:
+            sim = storage['model_simulation']
+            if 'estimated_80b_load_time' in sim:
+                print(f"   Est. Model Load: {sim['estimated_80b_load_time']:.0f} seconds")
+
+    # Model inference predictions
+    print(f"\n🔮 Performance Predictions for Qwen3-80B:")
+
+    # Based on benchmarks, estimate performance
+    if 'memory' in results and 'cpu' in results:
+        ram_bw = results['memory'].get('analysis', {}).get('ram_bandwidth', 20)
+        cpu_gflops = results['cpu'].get('tests', {}).get('matrix_mult', {}).get('avg_gflops', 50)
+
+        # Simple heuristic predictions
+        if ram_bw > 50 and cpu_gflops > 100:
+            perf_level = "Excellent"
+            tokens_estimate = "2-4"
+        elif ram_bw > 30 and cpu_gflops > 50:
+            perf_level = "Good"
+            tokens_estimate = "1-2"
+        elif ram_bw > 20 and cpu_gflops > 20:
+            perf_level = "Moderate"
+            tokens_estimate = "0.5-1"
+        else:
+            perf_level = "Limited"
+            tokens_estimate = "<0.5"
+
+        print(f"   Performance Level: {perf_level}")
+        print(f"   Expected Tokens/sec: {tokens_estimate}")
+        print(f"   Recommended Mode: ", end="")
+
+        if perf_level in ["Excellent", "Good"]:
+            print("min-gpu or max-gpu")
+        else:
+            print("no-gpu (CPU-only with caching)")
+
+    # Save results if requested
+    if args.perf_output:
+        output_file = args.perf_output
+        if not output_file.endswith('.json'):
+            output_file += '.json'
+
+        with open(output_file, 'w') as f:
+            json.dump(results, f, indent=2, default=str)
+        print(f"\n💾 Full results saved to: {output_file}")
+
+    print("\n" + "="*60)
+    print("✅ Performance testing complete!")
+    print("="*60)
+
+    return 0
+
+
 def test_dependencies() -> bool:
     """Test all required dependencies"""
     print("Testing dependencies...\n")
@@ -1210,6 +1331,18 @@ LOAD TIME:
     parser.add_argument("--dry-run", action="store_true",
                         help="Show loading strategy without actually loading model")
 
+    # Performance testing
+    parser.add_argument("--perf-test", action="store_true",
+                        help="Run complete hardware performance tests")
+    parser.add_argument("--test-memory", action="store_true",
+                        help="Test memory bandwidth performance")
+    parser.add_argument("--test-cpu", action="store_true",
+                        help="Test CPU performance")
+    parser.add_argument("--test-storage", action="store_true",
+                        help="Test storage I/O performance")
+    parser.add_argument("--perf-output", type=str, metavar="FILE",
+                        help="Save performance results to JSON file")
+
     # Output control
     parser.add_argument("--verbose", "-v", action="store_true",
                         help="Verbose output")
@@ -1345,6 +1478,10 @@ LOAD TIME:
     if args.test_deps:
         success = test_dependencies()
         return 0 if success else 1
+
+    # Performance testing modes
+    if args.perf_test or args.test_memory or args.test_cpu or args.test_storage:
+        return run_performance_tests(args)
 
     # Check cache mode
     if args.check:

@@ -38,33 +38,48 @@ uv pip install --upgrade git+https://github.com/huggingface/transformers.git
 
 ## Key Scripts
 
-### `run_qwen3_80b.py`
+### `qwen3_80b.py`
 Main inference script with interactive mode. Features:
 - Auto-detects CUDA availability and manages GPU memory
 - Includes both test prompt and interactive chat mode
 - Memory-efficient loading with 4-bit quantization
 - Configures max GPU memory usage (14GiB default)
+- Smart loading strategies (no-gpu, min-gpu, max-gpu modes)
+- Built-in caching system for faster subsequent loads
 
-### `qwen3_thinking.py`
-Specialized script for the "thinking" variant that:
-- Separates internal thinking process from final response
-- Parses special tokens (151668 for `</think>`)
-- Shows both reasoning and answer in interactive mode
+### `qwen3_80b_ipex_cache.py`
+Intel Extension for PyTorch (IPEX) optimized version with caching:
+- CPU optimization using IPEX for better performance
+- Caching system for model weights
+- Memory-efficient loading
 
-### `test_deps.py`
-Dependency verification script - run this first to ensure environment is properly configured.
+### `qwen3_80b_low_mem.py`
+Low memory variant for systems with limited resources:
+- Optimized for minimal memory usage
+- Suitable for systems with <50GB RAM
 
 ## Common Development Tasks
 
 ```bash
-# Test dependencies
-python test_deps.py
-
 # Run the main model (interactive mode)
-python run_qwen3_80b.py
+python qwen3_80b.py
 
-# Run thinking variant (shows reasoning process)
-python qwen3_thinking.py
+# Run with IPEX optimization (CPU performance boost)
+python qwen3_80b_ipex_cache.py
+
+# Run low memory variant
+python qwen3_80b_low_mem.py
+
+# Hardware Performance Testing
+python qwen3_80b.py --perf-test              # Run all performance tests
+python qwen3_80b.py --test-memory            # Test memory bandwidth only
+python qwen3_80b.py --test-cpu               # Test CPU performance only
+python qwen3_80b.py --test-storage           # Test storage I/O only
+python qwen3_80b.py --perf-test --perf-output results.json  # Save results
+
+# Create cache file for sharing
+python qwen3_80b.py --create-cache-only --load-strategy no-gpu
+python qwen3_80b.py --create-cache-only --cache-output qwen_cache.tar.gz
 
 # Quick memory check
 python -c "import torch; print(f'CUDA: {torch.cuda.is_available()}'); print(f'Memory: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.2f} GB' if torch.cuda.is_available() else '')"
