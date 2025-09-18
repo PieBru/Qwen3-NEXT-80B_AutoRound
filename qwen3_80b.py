@@ -339,21 +339,47 @@ class ModelCache:
                     pbar.update(1)
 
             else:
-                # Standard pickle loading
+                # Standard pickle loading - this is a monolithic operation
                 if TQDM_AVAILABLE:
-                    mem = self.get_memory_status()
-                    pbar.set_postfix_str(f"{mem['ram_free']:.1f}GB free")
-                    pbar.set_description("Loading pickled model")
-                else:
-                    print("   Loading model from cache...")
+                    pbar.close()  # Close the misleading progress bar
 
-                with open(paths['model'], 'rb') as f:
-                    model = pickle.load(f)
+                print("   Loading pickled model from cache...")
+                print("   ⚠️  This is a single operation that may take 1-2 minutes")
+                print("   ⚠️  Memory usage will grow to ~160GB during loading")
+                print("   💡 Consider using IPEX cache (qwen3_80b_ipex_cache.py) for better performance")
 
-                if TQDM_AVAILABLE:
-                    pbar.update(3)  # Skip intermediate steps for pickle
+                # Show initial memory status
+                mem_before = self.get_memory_status()
+                print(f"   📊 Before: {mem_before['ram_used']:.1f}GB used, {mem_before['ram_free']:.1f}GB free")
 
-            if TQDM_AVAILABLE:
+                # Monitor memory in a separate thread if possible
+                import threading
+                stop_monitoring = threading.Event()
+
+                def monitor_memory():
+                    """Monitor memory usage during pickle loading"""
+                    max_used = 0
+                    while not stop_monitoring.is_set():
+                        mem = self.get_memory_status()
+                        max_used = max(max_used, mem['ram_used'])
+                        print(f"\r   📊 Loading: {mem['ram_used']:.1f}GB used, {mem['ram_free']:.1f}GB free", end='', flush=True)
+                        time.sleep(2)
+                    print(f"\n   📊 Peak: {max_used:.1f}GB used during loading")
+
+                # Start monitoring thread
+                monitor_thread = threading.Thread(target=monitor_memory, daemon=True)
+                monitor_thread.start()
+
+                # Load the pickle file (this is where memory grows)
+                try:
+                    with open(paths['model'], 'rb') as f:
+                        model = pickle.load(f)
+                finally:
+                    stop_monitoring.set()
+                    monitor_thread.join(timeout=1)
+
+            # Close progress bar if it's still open and we have IPEX model
+            if TQDM_AVAILABLE and metadata.get('is_ipex_optimized', False):
                 pbar.close()
 
             load_time = time.time() - start_time
@@ -391,7 +417,24 @@ class ModelCache:
 
 def setup_environment(threads: Optional[int] = None, verbose: bool = False, offline: bool = False, use_gptq: bool = False, no_gpu: bool = False) -> int:
     """Configure environment for optimal performance"""
-    cpu_count = threads or os.cpu_count()
+    # Use physical cores only for better performance (avoid hyperthreading overhead)
+    try:
+        import psutil
+        physical_cores = psutil.cpu_count(logical=False)
+        logical_cores = psutil.cpu_count(logical=True)
+        default_threads = physical_cores  # Use physical cores by default
+        if verbose:
+            print(f"   🖥️  CPU: {physical_cores} physical cores, {logical_cores} logical cores")
+            print(f"   ⚙️  Using {default_threads} threads (physical cores only for better performance)")
+    except ImportError:
+        # Fallback to os.cpu_count() but try to estimate physical cores
+        logical_cores = os.cpu_count()
+        # Rough estimate: assume hyperthreading gives 2 logical per physical
+        default_threads = max(1, logical_cores // 2) if logical_cores else 4
+        if verbose:
+            print(f"   ⚙️  Estimated {default_threads} physical cores from {logical_cores} logical cores")
+
+    cpu_count = threads or default_threads
 
     # IMPORTANT: Disable GPTQModel EARLY before any imports
     # This must happen before transformers is imported
@@ -408,13 +451,23 @@ def setup_environment(threads: Optional[int] = None, verbose: bool = False, offl
     if no_gpu:
         os.environ["CUDA_VISIBLE_DEVICES"] = ""
 
-    # Threading configuration
+    # Threading configuration - use physical cores for better performance
     for var in ["OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS",
                 "VECLIB_MAXIMUM_THREADS", "NUMEXPR_NUM_THREADS"]:
         if var not in os.environ:  # Only set if not already configured
             os.environ[var] = str(cpu_count)
         elif verbose:
             print(f"   ℹ️  {var} already set to {os.environ[var]}")
+
+    # Also set PyTorch threads to physical cores for better cache efficiency
+    try:
+        import torch
+        torch.set_num_threads(cpu_count)
+        torch.set_num_interop_threads(min(4, cpu_count))  # Usually 2-4 is optimal
+        if verbose:
+            print(f"   🔧 PyTorch threads set to {cpu_count} (physical cores)")
+    except ImportError:
+        pass
 
     # GPU configuration (only if not in no-gpu mode)
     if not no_gpu:

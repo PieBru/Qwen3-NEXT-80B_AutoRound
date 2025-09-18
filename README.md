@@ -314,7 +314,18 @@ python test_cache_performance.py
 - **Format**: Pickled PyTorch model (maintains exact state)
 - **Compatibility**: Works with CPU and GPU modes
 
+⚠️ **Known Issue**: Pickle cache loading can use ~160GB RAM temporarily. Consider using IPEX cache instead for better memory efficiency.
+
 ## Intel Extension for PyTorch (IPEX) Optimization 🚀
+
+### New: Threading Optimization (v3.6)
+
+The scripts now use **physical cores only** instead of all logical threads for better performance:
+- **Why**: Hyperthreading hurts performance for memory-intensive operations
+- **Benefit**: Better cache efficiency and reduced memory contention
+- **Example**: On a 24-core CPU with hyperthreading:
+  - Before: 48 threads (oversubscribed, cache thrashing)
+  - After: 24 threads (one per physical core, optimal)
 
 ### New: IPEX Cache with Progress & Integrity Checking (v3.5)
 

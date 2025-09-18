@@ -306,6 +306,28 @@ def load_model_with_ipex_cache(
 ):
     """Load model with IPEX optimization caching"""
 
+    # Set optimal thread count for loading (physical cores only)
+    try:
+        import psutil
+        physical_cores = psutil.cpu_count(logical=False)
+        logical_cores = psutil.cpu_count(logical=True)
+        print(f"\n🖥️  CPU: {physical_cores} physical cores, {logical_cores} logical cores")
+        print(f"   Using {physical_cores} threads (physical cores only for better performance)")
+
+        # Set all thread-related environment variables
+        for var in ["OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS",
+                    "VECLIB_MAXIMUM_THREADS", "NUMEXPR_NUM_THREADS"]:
+            os.environ[var] = str(physical_cores)
+
+        # Set PyTorch threads
+        torch.set_num_threads(physical_cores)
+        torch.set_num_interop_threads(min(4, physical_cores))
+    except ImportError:
+        # Fallback to half of logical cores
+        cpu_count = os.cpu_count() // 2 if os.cpu_count() else 4
+        for var in ["OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS"]:
+            os.environ[var] = str(cpu_count)
+
     cache = IPEXModelCache()
 
     # Try loading from cache first
