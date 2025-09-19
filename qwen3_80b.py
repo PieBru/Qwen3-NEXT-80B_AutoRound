@@ -135,7 +135,8 @@ class CheckpointManager:
                 print(f"\n♻️  Found {stage} checkpoint, loading...")
                 print(f"   Location: {checkpoint_path}")
 
-                checkpoint_data = torch.load(checkpoint_path, map_location='cpu')
+                # weights_only=False because we're loading full checkpoint with config, not just weights
+                checkpoint_data = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
 
                 # Check if checkpoint is recent (less than 24 hours old)
                 age_hours = (time.time() - checkpoint_data.get('timestamp', 0)) / 3600
@@ -325,14 +326,25 @@ class ModelCache:
             # Load model with memory mapping
             print("   Using memory-mapped loading...")
             try:
-                checkpoint = torch.load(paths['model'], map_location='cpu', mmap=True)
+                # weights_only=False because we're loading full model with config
+                checkpoint = torch.load(paths['model'], map_location='cpu', mmap=True, weights_only=False)
             except:
-                checkpoint = torch.load(paths['model'], map_location='cpu')
+                checkpoint = torch.load(paths['model'], map_location='cpu', weights_only=False)
 
             from transformers import AutoConfig, AutoModelForCausalLM
 
             # Create model and load state
-            config = AutoConfig.from_dict(checkpoint['model_config'])
+            # Get the config from the saved dict
+            config_dict = checkpoint['model_config']
+            model_type = config_dict.get('model_type', 'qwen3_next')
+
+            # Create config using the appropriate class
+            from transformers.models.auto.configuration_auto import CONFIG_MAPPING
+            if model_type in CONFIG_MAPPING:
+                config_class = CONFIG_MAPPING[model_type]
+                config = config_class(**config_dict)
+            else:
+                raise ValueError(f"Unknown model type: {model_type}")
             model = AutoModelForCausalLM.from_config(
                 config,
                 trust_remote_code=True,
@@ -543,16 +555,27 @@ class ModelCache:
                 # First, try to load with memory mapping
                 try:
                     # Use mmap=True for more efficient memory usage - much faster than pickle!
-                    checkpoint = torch.load(paths['model'], map_location='cpu', mmap=True)
+                    # weights_only=False because we're loading full model with config
+                    checkpoint = torch.load(paths['model'], map_location='cpu', mmap=True, weights_only=False)
                 except Exception as e:
                     # Fallback to regular loading if mmap fails
                     print(f"   Memory mapping not available ({e}), using standard loading...")
-                    checkpoint = torch.load(paths['model'], map_location='cpu')
+                    checkpoint = torch.load(paths['model'], map_location='cpu', weights_only=False)
 
                 from transformers import AutoConfig, AutoModelForCausalLM
 
                 # Extract just the config first
-                config = AutoConfig.from_dict(checkpoint['model_config'])
+                # Get the config from the saved dict
+            config_dict = checkpoint['model_config']
+            model_type = config_dict.get('model_type', 'qwen3_next')
+
+            # Create config using the appropriate class
+            from transformers.models.auto.configuration_auto import CONFIG_MAPPING
+            if model_type in CONFIG_MAPPING:
+                config_class = CONFIG_MAPPING[model_type]
+                config = config_class(**config_dict)
+            else:
+                raise ValueError(f"Unknown model type: {model_type}")
 
                 # Create model with low memory usage flag
                 print("   Creating model structure...")
@@ -1388,7 +1411,15 @@ def load_model(args: argparse.Namespace):
         if checkpoint_data:
             try:
                 from transformers import AutoConfig
-                config = AutoConfig.from_dict(checkpoint_data['config'])
+                config_dict = checkpoint_data['config']
+                model_type = config_dict.get('model_type', 'qwen3_next')
+                # Create config using the appropriate class
+                from transformers.models.auto.configuration_auto import CONFIG_MAPPING
+                if model_type in CONFIG_MAPPING:
+                    config_class = CONFIG_MAPPING[model_type]
+                    config = config_class(**config_dict)
+                else:
+                    raise ValueError(f"Unknown model type: {model_type}")
                 model = AutoModelForCausalLM.from_config(config, trust_remote_code=True)
                 model.load_state_dict(checkpoint_data['model_state_dict'])
                 print("   ✅ Loaded from post-repack checkpoint, skipping hours of loading!")
@@ -1409,7 +1440,15 @@ def load_model(args: argparse.Namespace):
         if checkpoint_data:
             try:
                 from transformers import AutoConfig
-                config = AutoConfig.from_dict(checkpoint_data['config'])
+                config_dict = checkpoint_data['config']
+                model_type = config_dict.get('model_type', 'qwen3_next')
+                # Create config using the appropriate class
+                from transformers.models.auto.configuration_auto import CONFIG_MAPPING
+                if model_type in CONFIG_MAPPING:
+                    config_class = CONFIG_MAPPING[model_type]
+                    config = config_class(**config_dict)
+                else:
+                    raise ValueError(f"Unknown model type: {model_type}")
                 model = AutoModelForCausalLM.from_config(config, trust_remote_code=True)
                 model.load_state_dict(checkpoint_data['model_state_dict'])
                 print("   ✅ Loaded from post-shards checkpoint, skipping shard loading!")
