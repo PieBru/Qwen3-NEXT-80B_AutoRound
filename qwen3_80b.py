@@ -1309,7 +1309,7 @@ def load_model(args: argparse.Namespace):
         # Show relevant details based on strategy
         if loading_strategy == 'cpu_only':
             # More accurate constants based on testing
-            print(f"   • Loading ~40GB model in shards (expect 60-90 min first load)")
+            print(f"   • Loading ~40GB model in shards (this will take time)")
             if not args.no_ipex:
                 # Updated based on actual measurements: model uses ~117GB, IPEX doubles it
                 ipex_peak = 230  # GB - actual measured peak
@@ -1577,7 +1577,7 @@ def load_model(args: argparse.Namespace):
                 print("\n📝 Will create fast-load cache after optimization")
                 print("   Cache location: ~/.cache/qwen3_fast_loader/")
                 print("   Cache size: ~40GB (saves IPEX-optimized model)")
-                print("   Next run: <1 minute load time!")
+                print("   Next run: Much faster loading from cache")
             else:
                 print("\n📝 Note: Hybrid GPU+CPU loading cannot be cached")
 
@@ -2323,7 +2323,7 @@ EXAMPLES:
 
 LOADING STRATEGIES:
   min-gpu: (DEFAULT) Load non-expert layers on GPU (~12GB), experts on CPU
-  no-gpu:  Pure CPU-only mode (25-30 min load, but reliable - no GPU issues)
+  no-gpu:  Pure CPU-only mode (most reliable - no GPU issues)
   max-gpu: Fill VRAM with as many layers as possible
   auto:    Same as min-gpu
 
@@ -2353,8 +2353,8 @@ v3.3 IMPROVEMENTS:
   • max-gpu fills available VRAM with as many layers as possible
 
 CACHING (ENABLED BY DEFAULT!):
-  First run: Creates cache automatically (30-60 min + cache creation)
-  Next runs: Loads from cache in <1 minute! (30-50x faster)
+  First run: Creates cache automatically after initial load
+  Next runs: Loads from cache much faster (typically 10-50x speedup)
 
   MEMORY-EFFICIENT CACHING:
   • CPU mode with IPEX (default): Uses torch.save (memory efficient!)
@@ -2371,12 +2371,12 @@ CACHING (ENABLED BY DEFAULT!):
 
 LOAD TIME:
   Without cache: 30-60 minutes (9 shards × 4.5GB each)
-  With cache: <1 minute! (CPU-only mode after first run)
+  With cache: Much faster (varies based on RAM/swap availability)
 
 CHECKPOINTING (NEW!):
   Saves intermediate states during long CPU loading:
-  • After shard loading (~50 min): Can resume if repacking fails
-  • After CPU repacking (~15 min): Can resume from fully loaded state
+  • After shard loading: Can resume if repacking fails
+  • After CPU repacking: Can resume from fully loaded state
 
   %(prog)s --clear-checkpoints     # Clear saved checkpoints
   %(prog)s --no-checkpoint         # Disable checkpoint save/load
