@@ -38,25 +38,21 @@ uv pip install --upgrade git+https://github.com/huggingface/transformers.git
 
 ## Key Scripts
 
-### `qwen3_80b.py`
-Main inference script with interactive mode. Features:
+### `qwen3_80b.py` (Unified Main Script)
+Complete inference script with all features integrated:
 - Auto-detects CUDA availability and manages GPU memory
 - Includes both test prompt and interactive chat mode
 - Memory-efficient loading with 4-bit quantization
 - Configures max GPU memory usage (14GiB default)
 - Smart loading strategies (no-gpu, min-gpu, max-gpu modes)
 - Built-in caching system for faster subsequent loads
-
-### `qwen3_80b_ipex_cache.py`
-Intel Extension for PyTorch (IPEX) optimized version with caching:
-- CPU optimization using IPEX for better performance
-- Caching system for model weights
-- Memory-efficient loading
-
-### `qwen3_80b_low_mem.py`
-Low memory variant for systems with limited resources:
-- Optimized for minimal memory usage
-- Suitable for systems with <50GB RAM
+- IPEX optimization (automatic with CPU loading)
+- Advanced caching with pickle/torch.save support
+- Memory mapping (mmap) for efficient cache loading
+- Checkpoint recovery for long operations
+- Interactive mode with token/second performance stats
+- Custom cache directory support (--cache-dir)
+- Hardware performance benchmarking
 
 ## Common Development Tasks
 
@@ -64,11 +60,14 @@ Low memory variant for systems with limited resources:
 # Run the main model (interactive mode)
 python qwen3_80b.py
 
-# Run with IPEX optimization (CPU performance boost)
-python qwen3_80b_ipex_cache.py
+# Run with IPEX optimization (automatic for CPU)
+python qwen3_80b.py --load-strategy no-gpu
 
-# Run low memory variant
-python qwen3_80b_low_mem.py
+# Run without IPEX for minimal memory (slower)
+python qwen3_80b.py --load-strategy no-gpu --no-ipex
+
+# Use custom cache directory
+python qwen3_80b.py --cache-dir /path/to/large/storage
 
 # Hardware Performance Testing
 python qwen3_80b.py --perf-test              # Run all performance tests

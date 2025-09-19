@@ -57,6 +57,104 @@ except ImportError:
     DEFAULT_MODEL_NAME = "Intel/Qwen3-Next-80B-A3B-Thinking-int4-mixed-AutoRound"
 
 
+def get_cache_directory(args: argparse.Namespace = None) -> Path:
+    """Get the cache directory from args or use default"""
+    if args and hasattr(args, 'cache_dir') and args.cache_dir:
+        cache_dir = Path(args.cache_dir).expanduser().absolute()
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        return cache_dir
+    # Use default from config or fallback
+    return CACHE_DIR
+
+
+class CheckpointManager:
+    """Manages intermediate checkpoints during model loading"""
+
+    def __init__(self, cache_dir: Path = None):
+        self.checkpoint_dir = (cache_dir or CACHE_DIR) / "checkpoints"
+        self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
+
+    def get_checkpoint_path(self, model_name: str, stage: str) -> Path:
+        """Get path for a specific checkpoint stage"""
+        safe_name = model_name.replace("/", "_")
+        return self.checkpoint_dir / f"{safe_name}_{stage}.pt"
+
+    def save_checkpoint(self, model, model_name: str, stage: str, metadata: dict = None):
+        """Save model checkpoint after critical stage"""
+        checkpoint_path = self.get_checkpoint_path(model_name, stage)
+        temp_path = checkpoint_path.with_suffix('.tmp')
+
+        print(f"\n💾 Saving {stage} checkpoint...")
+        print(f"   Location: {checkpoint_path}")
+
+        try:
+            start_time = time.time()
+            checkpoint_data = {
+                'model_state_dict': model.state_dict(),
+                'config': model.config.to_dict() if hasattr(model, 'config') else {},
+                'stage': stage,
+                'timestamp': time.time(),
+                'metadata': metadata or {}
+            }
+
+            # Save to temp file first (atomic operation)
+            torch.save(checkpoint_data, temp_path)
+            # Rename atomically
+            temp_path.rename(checkpoint_path)
+
+            save_time = time.time() - start_time
+            size_gb = checkpoint_path.stat().st_size / (1024**3)
+            print(f"   ✅ Checkpoint saved in {save_time:.1f}s ({size_gb:.1f}GB)")
+            print(f"   💡 Recovery available if process fails!")
+            return True
+
+        except Exception as e:
+            print(f"   ⚠️  Checkpoint save failed: {e}")
+            if temp_path.exists():
+                temp_path.unlink()
+            return False
+
+    def load_checkpoint(self, model_name: str, stage: str) -> Optional[dict]:
+        """Load checkpoint if it exists"""
+        checkpoint_path = self.get_checkpoint_path(model_name, stage)
+
+        if checkpoint_path.exists():
+            try:
+                print(f"\n♻️  Found {stage} checkpoint, loading...")
+                print(f"   Location: {checkpoint_path}")
+
+                checkpoint_data = torch.load(checkpoint_path, map_location='cpu')
+
+                # Check if checkpoint is recent (less than 24 hours old)
+                age_hours = (time.time() - checkpoint_data.get('timestamp', 0)) / 3600
+                if age_hours < 24:
+                    print(f"   ✅ Checkpoint is {age_hours:.1f} hours old (fresh)")
+                    return checkpoint_data
+                else:
+                    print(f"   ⚠️  Checkpoint is {age_hours:.1f} hours old (stale)")
+                    return None
+
+            except Exception as e:
+                print(f"   ❌ Failed to load checkpoint: {e}")
+                return None
+        return None
+
+    def clear_checkpoints(self, model_name: str = None):
+        """Clear checkpoints for a specific model or all"""
+        if model_name:
+            safe_name = model_name.replace("/", "_")
+            pattern = f"{safe_name}_*.pt"
+        else:
+            pattern = "*.pt"
+
+        checkpoints = list(self.checkpoint_dir.glob(pattern))
+        for checkpoint in checkpoints:
+            checkpoint.unlink()
+            print(f"   Removed: {checkpoint.name}")
+
+        print(f"✅ Cleared {len(checkpoints)} checkpoints")
+
+
 def accelerate_shard_loading() -> None:
     """Configure environment for faster shard loading"""
     # Set environment variables to optimize loading
@@ -120,14 +218,28 @@ class ModelCache:
         """Save model to cache - handles models with hooks and IPEX optimization"""
         paths = self.get_cache_paths(model_name, device_type)
 
-        # Check if this is a huge model that shouldn't use pickle
+        # Check if we have enough memory for pickle serialization
         model_param_count = sum(p.numel() for p in model.parameters())
         model_size_gb = (model_param_count * 2) / (1024**3)  # Approximate size in GB
 
-        if not is_ipex_optimized and model_size_gb > 50:
-            print(f"\n⚠️  Model too large for pickle cache ({model_size_gb:.1f}GB estimated)")
-            print(f"   Pickle cache causes massive memory expansion (3x+ model size)")
-            print(f"   Please use IPEX cache instead: python qwen3_80b_ipex_cache.py")
+        # Get available memory
+        memory_status = self.get_memory_status()
+        available_memory = memory_status['ram_free'] + memory_status['swap_free']
+
+        # Pickle needs ~3x model size during serialization
+        required_memory = model_size_gb * 3
+
+        if not is_ipex_optimized and required_memory > available_memory:
+            print(f"\n⚠️  Insufficient memory for pickle cache")
+            print(f"   Model size: {model_size_gb:.1f}GB")
+            print(f"   Required for pickle: ~{required_memory:.1f}GB (3x model size)")
+            print(f"   Available (RAM+swap): {available_memory:.1f}GB")
+            print(f"   💡 Solutions:")
+            print(f"      1. Add more swap space (need {required_memory - available_memory:.1f}GB more)")
+            print(f"      2. Don't use --no-ipex flag (IPEX uses memory-efficient torch.save)")
+            print(f"      3. Free up memory by closing other applications")
+            print(f"   ℹ️  Note: IPEX optimization is applied by default on CPU and uses")
+            print(f"      torch.save instead of pickle (much more memory efficient!)")
             return False
 
         print(f"\n💾 Creating fast-load cache...")
@@ -350,18 +462,52 @@ class ModelCache:
                     pbar.update(1)
 
             else:
-                # Standard pickle loading - DISABLED for large models
-                if TQDM_AVAILABLE:
-                    pbar.close()  # Close the progress bar
+                # Standard pickle loading - check if we have enough memory
+                cache_size_gb = paths['model'].stat().st_size / (1024**3)
+                memory_status = self.get_memory_status()
+                available_memory = memory_status['ram_free'] + memory_status['swap_free']
 
-                print("   ❌ PICKLE CACHE DISABLED for 80B model!")
-                print("   ⚠️  Pickle cache causes 3x memory expansion (240GB+)")
-                print("   ⚠️  This would cause OOM on most systems")
-                print("\n   🔧 SOLUTION: Use IPEX cache instead:")
-                print("      python qwen3_80b_ipex_cache.py --interactive")
-                print("\n   Or clear this bad cache and start fresh:")
-                print("      python qwen3_80b.py --clear-cache")
-                return None, None  # Force reload without pickle cache
+                # Pickle needs about 2x the cache size to load (not 3x)
+                required_memory = cache_size_gb * 2
+
+                if available_memory < required_memory:
+                    if TQDM_AVAILABLE:
+                        pbar.close()  # Close the progress bar
+
+                    print(f"   ⚠️  Insufficient memory for pickle cache!")
+                    print(f"   Cache size: {cache_size_gb:.1f}GB")
+                    print(f"   Required: ~{required_memory:.1f}GB (2x cache size)")
+                    print(f"   Available: {available_memory:.1f}GB (RAM+swap)")
+                    print(f"\n   💡 Solutions:")
+                    print(f"      1. Add {required_memory - available_memory:.1f}GB more swap")
+                    print(f"      2. Use --bypass-cache to skip cache")
+                    print(f"      3. Clear cache with --clear-cache")
+                    return None, None
+
+                # We have enough memory, proceed with loading
+                if TQDM_AVAILABLE:
+                    pbar.set_description("Loading pickle cache (may use lots of RAM)")
+
+                print(f"   ⚠️  Loading {cache_size_gb:.1f}GB pickle cache...")
+                print(f"   Available memory: {available_memory:.1f}GB (sufficient)")
+                print(f"   This may take a few minutes and use significant RAM")
+
+                try:
+                    with open(paths['model'], 'rb') as f:
+                        model = pickle.load(f)
+
+                    if TQDM_AVAILABLE:
+                        pbar.update(1)
+
+                    print("   ✅ Model loaded from pickle cache!")
+
+                except MemoryError:
+                    print("   ❌ Out of memory while loading pickle cache!")
+                    print("   Try adding more swap space or use --bypass-cache")
+                    return None, None
+                except Exception as e:
+                    print(f"   ❌ Failed to load pickle cache: {e}")
+                    return None, None
 
             # Close progress bar if it's still open and we have IPEX model
             if TQDM_AVAILABLE and metadata.get('is_ipex_optimized', False):
@@ -444,15 +590,7 @@ def setup_environment(threads: Optional[int] = None, verbose: bool = False, offl
         elif verbose:
             print(f"   ℹ️  {var} already set to {os.environ[var]}")
 
-    # Also set PyTorch threads to physical cores for better cache efficiency
-    try:
-        import torch
-        torch.set_num_threads(cpu_count)
-        torch.set_num_interop_threads(min(4, cpu_count))  # Usually 2-4 is optimal
-        if verbose:
-            print(f"   🔧 PyTorch threads set to {cpu_count} (physical cores)")
-    except ImportError:
-        pass
+    # PyTorch threads will be set later in the function to avoid conflicts
 
     # GPU configuration (only if not in no-gpu mode)
     if not no_gpu:
@@ -469,14 +607,95 @@ def setup_environment(threads: Optional[int] = None, verbose: bool = False, offl
         if verbose:
             print("   📡 Running in offline mode")
 
-    # PyTorch threads
-    torch.set_num_threads(cpu_count)
-    torch.set_num_interop_threads(cpu_count)
+    # PyTorch threads - only set if not already configured
+    try:
+        # Check if we can still set thread counts (before parallel work starts)
+        current_threads = torch.get_num_threads()
+        if current_threads != cpu_count:
+            torch.set_num_threads(cpu_count)
+            torch.set_num_interop_threads(min(4, cpu_count))  # Usually 2-4 is optimal
+    except RuntimeError as e:
+        if verbose:
+            print(f"   ⚠️  Could not set PyTorch threads (already initialized): {e}")
 
     if verbose:
         print(f"🔧 Environment configured for {cpu_count} threads")
 
     return cpu_count
+
+
+def display_banner(quiet: bool = False) -> None:
+    """Display the application banner"""
+    if not quiet:
+        print("=" * 60)
+        print(f"Qwen3-Next-80B Loader v3.4 (with Fast Caching)")
+        print("https://github.com/PieBru/Qwen3-NEXT-80B_AutoRound")
+        print("=" * 60)
+
+
+def display_cache_info(model_name: str, quiet: bool = False) -> tuple[bool, Path, int]:
+    """Display cache information and return cache status"""
+    is_cached, cache_path, cache_size = check_model_cache(model_name)
+
+    if not quiet:
+        if is_cached:
+            print(f"\n📂 Model cached locally: {cache_path}")
+            print(f"   Size on disk: {cache_size / (1024**3):.1f}GB")
+        else:
+            print(f"\n📂 Model will be downloaded from Hugging Face")
+            print(f"   This will take time on first run!")
+
+    return is_cached, cache_path, cache_size
+
+
+def display_system_resources(quiet: bool = False, show_swap: bool = True) -> dict:
+    """Display system resources and return as dict"""
+    import psutil
+
+    total_ram = psutil.virtual_memory().total / (1024**3)
+    available_ram = psutil.virtual_memory().available / (1024**3)
+    used_ram = psutil.virtual_memory().used / (1024**3)
+
+    resources = {
+        'total_ram': total_ram,
+        'available_ram': available_ram,
+        'used_ram': used_ram,
+        'has_gpu': torch.cuda.is_available(),
+    }
+
+    if show_swap:
+        swap_total = psutil.swap_memory().total / (1024**3)
+        swap_free = psutil.swap_memory().free / (1024**3)
+        swap_used = psutil.swap_memory().used / (1024**3)
+        resources.update({
+            'swap_total': swap_total,
+            'swap_free': swap_free,
+            'swap_used': swap_used,
+        })
+
+    if resources['has_gpu']:
+        resources['gpu_name'] = torch.cuda.get_device_name(0)
+        resources['gpu_memory'] = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+        # Try to get free memory
+        try:
+            resources['gpu_free'] = (torch.cuda.get_device_properties(0).total_memory - torch.cuda.memory_allocated(0)) / (1024**3)
+        except:
+            resources['gpu_free'] = resources['gpu_memory'] * 0.9  # Estimate
+
+    if not quiet:
+        print(f"\n📊 System Resources:")
+        print(f"   RAM: {total_ram:.1f}GB total, {available_ram:.1f}GB available, {used_ram:.1f}GB used")
+
+        if show_swap:
+            print(f"   Swap: {swap_total:.1f}GB total, {swap_free:.1f}GB available, {swap_used:.1f}GB used")
+
+        if resources['has_gpu']:
+            print(f"   GPU: {resources['gpu_name']}")
+            print(f"   VRAM: {resources['gpu_memory']:.1f}GB total")
+        else:
+            print(f"   GPU: Not available")
+
+    return resources
 
 
 def check_model_cache(model_name: str = "Intel/Qwen3-Next-80B-A3B-Thinking-int4-mixed-AutoRound") -> tuple[bool, Path, int]:
@@ -538,6 +757,8 @@ def load_model(args: argparse.Namespace):
 
     model_name = args.model
 
+    # Banner was already shown in main() before calling this function
+
     # Print configuration
     if not args.quiet:
         print("=" * 60)
@@ -547,7 +768,8 @@ def load_model(args: argparse.Namespace):
 
     # Handle fast caching (enabled by default, disable with --bypass-cache)
     if not args.bypass_cache:
-        cache = ModelCache()
+        cache_dir = get_cache_directory(args)
+        cache = ModelCache(cache_dir)
         device_type = "cpu" if args.load_strategy == "no-gpu" else "cuda"
 
         # Clear cache if rebuild requested
@@ -589,8 +811,20 @@ def load_model(args: argparse.Namespace):
         args._cache_needs_save = True
         args._cache_device_type = device_type  # Store for later use
 
-    # Check cache
-    is_cached, cache_path, cache_size = check_model_cache(model_name)
+    # Get cache and system info from args if they were already computed in main()
+    if hasattr(args, '_cache_info'):
+        # Cache info was already displayed in main()
+        is_cached, cache_path, cache_size = args._cache_info
+    else:
+        # Running standalone, need to check cache ourselves
+        is_cached, cache_path, cache_size = check_model_cache(model_name)
+        if not args.quiet:
+            if is_cached:
+                print(f"\n📂 Model cached locally: {cache_path}")
+                print(f"   Size on disk: {cache_size / (1024**3):.1f}GB")
+            else:
+                print(f"\n📂 Model will be downloaded from Hugging Face")
+                print(f"   This will take time on first run!")
 
     # Set offline mode if model is cached and user didn't explicitly disable it
     if is_cached and args.offline is None:
@@ -599,29 +833,32 @@ def load_model(args: argparse.Namespace):
         if args.verbose:
             print("   📡 Auto-enabled offline mode (model is cached)")
 
-    if not args.quiet:
-        if is_cached:
-            print(f"\n📂 Model cached locally: {cache_path}")
-            print(f"   Size on disk: {cache_size / (1024**3):.1f}GB")
-        else:
-            print(f"\n📂 Model will be downloaded from Hugging Face")
-            print(f"   This will take time on first run!")
+    # Get system resources from args if they were already computed in main()
+    if hasattr(args, '_resources'):
+        # Resources were already displayed in main()
+        resources = args._resources
+        total_ram = resources['total_ram']
+        available_ram = resources['available_ram']
+        swap_total = resources.get('swap_total', 0)
+        swap_free = resources.get('swap_free', 0)
+        swap_used = resources.get('swap_used', 0)
+    else:
+        # Running standalone, need to get system info ourselves
+        import psutil
+        total_ram = psutil.virtual_memory().total / (1024**3)
+        available_ram = psutil.virtual_memory().available / (1024**3)
+        used_ram = psutil.virtual_memory().used / (1024**3)
+        swap_total = psutil.swap_memory().total / (1024**3)
+        swap_used = psutil.swap_memory().used / (1024**3)
+        swap_free = psutil.swap_memory().free / (1024**3)
 
-    # System info with swap
-    total_ram = psutil.virtual_memory().total / (1024**3)
-    available_ram = psutil.virtual_memory().available / (1024**3)
-    used_ram = psutil.virtual_memory().used / (1024**3)
-    swap_total = psutil.swap_memory().total / (1024**3)
-    swap_used = psutil.swap_memory().used / (1024**3)
-    swap_free = psutil.swap_memory().free / (1024**3)
-
-    if not args.quiet:
-        print(f"\n📊 System Resources:")
-        print(f"   RAM: {total_ram:.1f}GB total, {available_ram:.1f}GB available, {used_ram:.1f}GB used")
-        if swap_total > 0:
-            print(f"   Swap: {swap_total:.1f}GB total, {swap_free:.1f}GB available, {swap_used:.1f}GB used")
-        else:
-            print(f"   Swap: Not configured")
+        if not args.quiet:
+            print(f"\n📊 System Resources:")
+            print(f"   RAM: {total_ram:.1f}GB total, {available_ram:.1f}GB available, {used_ram:.1f}GB used")
+            if swap_total > 0:
+                print(f"   Swap: {swap_total:.1f}GB total, {swap_free:.1f}GB available, {swap_used:.1f}GB used")
+            else:
+                print(f"   Swap: Not configured")
 
     # Determine loading strategy BEFORE any model loading attempts
     device_map = "auto"  # Default, will be overridden based on strategy
@@ -825,6 +1062,50 @@ def load_model(args: argparse.Namespace):
     if args.verbose and not args.no_offload and device_map != "cpu":
         print(f"   📁 Offload folder: {offload_folder}")
 
+    # Initialize checkpoint manager
+    cache_dir = get_cache_directory(args)
+    checkpoint_mgr = CheckpointManager(cache_dir)
+
+    # Check for existing checkpoints (only for CPU mode where loading takes hours)
+    if device_map == "cpu" and not args.bypass_cache and args.use_checkpoint:
+        # Try to load from post-repacking checkpoint first (most complete)
+        checkpoint_data = checkpoint_mgr.load_checkpoint(model_name, "post_repack")
+        if checkpoint_data:
+            try:
+                from transformers import AutoConfig
+                config = AutoConfig.from_dict(checkpoint_data['config'])
+                model = AutoModelForCausalLM.from_config(config, trust_remote_code=True)
+                model.load_state_dict(checkpoint_data['model_state_dict'])
+                print("   ✅ Loaded from post-repack checkpoint, skipping hours of loading!")
+
+                # Jump straight to tokenizer loading
+                tokenizer = AutoTokenizer.from_pretrained(
+                    str(cache_path) if is_cached else model_name,
+                    trust_remote_code=True,
+                    local_files_only=is_cached
+                )
+                return model, tokenizer
+            except Exception as e:
+                print(f"   ⚠️  Failed to restore from checkpoint: {e}")
+                print("   Proceeding with normal loading...")
+
+        # Try post-shard checkpoint if post-repack failed
+        checkpoint_data = checkpoint_mgr.load_checkpoint(model_name, "post_shards")
+        if checkpoint_data:
+            try:
+                from transformers import AutoConfig
+                config = AutoConfig.from_dict(checkpoint_data['config'])
+                model = AutoModelForCausalLM.from_config(config, trust_remote_code=True)
+                model.load_state_dict(checkpoint_data['model_state_dict'])
+                print("   ✅ Loaded from post-shards checkpoint, skipping shard loading!")
+                print("   ℹ️  Note: CPU repacking will still occur...")
+
+                # Continue to repacking phase
+                # Model is loaded but not yet repacked
+            except Exception as e:
+                print(f"   ⚠️  Failed to restore from checkpoint: {e}")
+                print("   Proceeding with normal loading...")
+
     # Explain the upcoming warnings and processes for CPU mode
     if device_map == "cpu" and not args.quiet:
         print("\n   ℹ️  Note: You may see warnings and progress bars below:")
@@ -858,12 +1139,23 @@ def load_model(args: argparse.Namespace):
             **load_kwargs
         )
 
+        # Save checkpoint after shard loading (before CPU repacking)
+        if device_map == "cpu" and not args.bypass_cache and args.use_checkpoint:
+            print("\n   📍 Shard loading complete!")
+            checkpoint_mgr.save_checkpoint(model, model_name, "post_shards", {
+                'device_map': device_map,
+                'dtype': str(load_kwargs.get('dtype', 'float16'))
+            })
+
         # For CPU mode, ensure model is properly on CPU
         if device_map == "cpu":
             if args.verbose:
                 print("   Ensuring model is on CPU...")
             # Don't explicitly move - let the model handle its own device placement
             # Some quantized models have internal CUDA kernels that shouldn't be moved
+
+            # Note: CPU repacking happens automatically inside transformers
+            # We'll save another checkpoint after this completes
 
     except RuntimeError as e:
         error_msg = str(e)
@@ -925,6 +1217,16 @@ def load_model(args: argparse.Namespace):
             raise
 
     load_time = time.time() - start_time
+
+    # Save checkpoint after full loading and repacking (CPU mode only)
+    if device_map == "cpu" and not args.bypass_cache and args.use_checkpoint:
+        print("\n   📍 CPU repacking complete!")
+        checkpoint_mgr.save_checkpoint(model, model_name, "post_repack", {
+            'device_map': device_map,
+            'dtype': str(load_kwargs.get('dtype', 'float16')),
+            'load_time': load_time,
+            'repacked': True
+        })
 
     if not args.quiet:
         print(f"\n✅ Model loaded in {load_time:.1f}s ({load_time/60:.1f} minutes)")
@@ -1077,7 +1379,8 @@ def load_model(args: argparse.Namespace):
 
     # Save to cache AFTER IPEX optimization (if applicable)
     if not args.bypass_cache and hasattr(args, '_cache_needs_save'):
-        cache = ModelCache()
+        cache_dir = get_cache_directory(args)
+        cache = ModelCache(cache_dir)
         device_type = getattr(args, '_cache_device_type', "cpu" if device_map == "cpu" else "cuda")
 
         # Save the IPEX-optimized model if IPEX was applied
@@ -1090,6 +1393,87 @@ def load_model(args: argparse.Namespace):
     return model, tokenizer
 
 
+def test_model_responsiveness(model: Any, tokenizer: Any, verbose: bool = False) -> bool:
+    """Quick test to see if model can generate anything"""
+    print("\n🔍 Testing model responsiveness...")
+
+    try:
+        # Very simple test prompt
+        test_prompt = "1 + 1 ="
+        inputs = tokenizer(test_prompt, return_tensors="pt")
+
+        # Try to detect model device
+        try:
+            model_device = next(model.parameters()).device
+        except:
+            model_device = torch.device('cpu')
+
+        inputs = {k: v.to(model_device) if hasattr(v, 'to') else v for k, v in inputs.items()}
+
+        print(f"   Testing with prompt: '{test_prompt}'")
+        print(f"   Generating just 1 token to test...")
+
+        start_time = time.time()
+        with torch.no_grad():
+            # Generate just 1 token with 30 second timeout
+            import threading
+            outputs = None
+            error = None
+
+            def generate():
+                nonlocal outputs, error
+                try:
+                    outputs = model.generate(
+                        **inputs,
+                        max_new_tokens=1,
+                        temperature=0.0,  # Greedy for speed
+                        do_sample=False,
+                        pad_token_id=tokenizer.eos_token_id
+                    )
+                except Exception as e:
+                    error = e
+
+            thread = threading.Thread(target=generate)
+            thread.daemon = True
+            thread.start()
+            thread.join(30)  # 30 second timeout
+
+            if thread.is_alive():
+                print("   ❌ Model is not responding (timeout after 30s)")
+                print("\n   ⚠️  CPU inference appears to be stuck!")
+                print("   Possible causes:")
+                print("   • Model is corrupted")
+                print("   • CPU is too slow (80B model needs fast CPU)")
+                print("   • Memory issues (check swap usage)")
+                print("   • Try loading from cache instead")
+                return False
+
+            if error:
+                print(f"   ❌ Generation error: {error}")
+                return False
+
+            if outputs is None:
+                print("   ❌ No output produced")
+                return False
+
+            elapsed = time.time() - start_time
+            result = tokenizer.decode(outputs[0], skip_special_tokens=True)
+            print(f"   ✅ Model responded in {elapsed:.1f}s: '{result}'")
+
+            if elapsed > 10:
+                print(f"   ⚠️  Warning: Single token took {elapsed:.1f}s")
+                print(f"   Full responses will be VERY slow (~{elapsed * 100:.0f}s for 100 tokens)")
+
+            return True
+
+    except Exception as e:
+        print(f"   ❌ Test failed: {e}")
+        if verbose:
+            import traceback
+            traceback.print_exc()
+        return False
+
+
 def interactive_mode(model: Any, tokenizer: Any, args: argparse.Namespace) -> None:
     """Run interactive chat mode"""
     print("\n" + "=" * 60)
@@ -1097,6 +1481,13 @@ def interactive_mode(model: Any, tokenizer: Any, args: argparse.Namespace) -> No
     if args.thinking:
         print("Thinking mode enabled - will show reasoning process")
     print("=" * 60)
+
+    # Test model responsiveness on first run
+    if not hasattr(args, 'model_tested'):
+        if not test_model_responsiveness(model, tokenizer, args.verbose):
+            print("\n⚠️  Model responsiveness test failed!")
+            print("Continuing anyway, but generation may be very slow or stuck...")
+        args.model_tested = True
 
     while True:
         try:
@@ -1120,21 +1511,110 @@ def interactive_mode(model: Any, tokenizer: Any, args: argparse.Namespace) -> No
             if not args.quiet:
                 print("\nGenerating...")
 
+            # Count input tokens
+            input_token_count = inputs['input_ids'].shape[1]
+
+            # Add streaming callback for progress
+            tokens_generated = []
+            generation_start_time = None
+
+            def generation_callback(generated_ids):
+                """Callback to track generation progress"""
+                nonlocal generation_start_time, tokens_generated
+                if generation_start_time is None:
+                    generation_start_time = time.time()
+                    print("   First token generated!", end="", flush=True)
+
+                # Track tokens
+                new_tokens = generated_ids.shape[1] - input_token_count - len(tokens_generated)
+                tokens_generated.extend([1] * new_tokens)
+
+                # Show progress every 10 tokens
+                if len(tokens_generated) % 10 == 0:
+                    elapsed = time.time() - generation_start_time
+                    speed = len(tokens_generated) / elapsed if elapsed > 0 else 0
+                    print(f"\r   Generated {len(tokens_generated)} tokens ({speed:.1f} tok/s)...", end="", flush=True)
+
             start_time = time.time()
-            with torch.no_grad():
-                outputs = model.generate(
-                    **inputs,
-                    max_new_tokens=args.max_tokens,
-                    temperature=args.temperature,
-                    do_sample=args.temperature > 0,
-                    pad_token_id=tokenizer.eos_token_id
-                )
+
+            # Set up generation config with timeout and streaming
+            generation_config = {
+                'max_new_tokens': args.max_tokens,
+                'temperature': args.temperature,
+                'do_sample': args.temperature > 0,
+                'pad_token_id': tokenizer.eos_token_id,
+                'eos_token_id': tokenizer.eos_token_id,
+            }
+
+            # Add early stopping
+            if hasattr(model.config, 'eos_token_id'):
+                generation_config['eos_token_id'] = model.config.eos_token_id
+
+            try:
+                with torch.no_grad():
+                    # Use a timeout mechanism
+                    import signal
+                    import threading
+
+                    outputs = None
+                    generation_error = None
+
+                    def generate_with_timeout():
+                        nonlocal outputs, generation_error
+                        try:
+                            outputs = model.generate(**inputs, **generation_config)
+                        except Exception as e:
+                            generation_error = e
+
+                    # Create thread for generation
+                    gen_thread = threading.Thread(target=generate_with_timeout)
+                    gen_thread.daemon = True
+                    gen_thread.start()
+
+                    # Wait with timeout (5 minutes max for generation)
+                    timeout_seconds = 300
+                    gen_thread.join(timeout_seconds)
+
+                    if gen_thread.is_alive():
+                        print(f"\n\n⚠️  Generation timed out after {timeout_seconds} seconds!")
+                        print("   This may indicate the model is stuck or running very slowly on CPU.")
+                        print("   Tips:")
+                        print("   • Try a shorter prompt")
+                        print(f"   • Reduce --max-tokens (current: {args.max_tokens})")
+                        print("   • Use --temperature 0.0 for faster greedy decoding")
+                        print("   • Consider using GPU mode if available")
+                        print("   • Enable IPEX (remove --no-ipex) for 2-4x speedup")
+                        continue
+
+                    if generation_error:
+                        raise generation_error
+
+                    if outputs is None:
+                        print("\n❌ Generation failed - no output produced")
+                        continue
+
+            except Exception as e:
+                print(f"\n❌ Generation error: {e}")
+                if args.verbose:
+                    import traceback
+                    traceback.print_exc()
+                continue
+
+            # Clear progress line
+            print("\r" + " " * 80 + "\r", end="")
 
             # Decode
             response = tokenizer.decode(outputs[0], skip_special_tokens=not args.thinking)
             gen_time = time.time() - start_time
 
+            # Count output tokens (total tokens - input tokens)
+            total_tokens = outputs.shape[1]
+            output_tokens = total_tokens - input_token_count
+
             # Handle thinking mode
+            thinking_tokens = 0
+            answer_tokens = 0
+
             if args.thinking and "</think>" in response:
                 parts = response.split("</think>")
                 if len(parts) >= 2:
@@ -1142,23 +1622,56 @@ def interactive_mode(model: Any, tokenizer: Any, args: argparse.Namespace) -> No
                     answer = parts[1].strip()
 
                     if thinking and thinking.startswith("<think>"):
+                        # Count thinking tokens
+                        thinking_text = thinking.replace("<think>", "").strip()
+                        thinking_tokens = len(tokenizer.encode(thinking_text, add_special_tokens=False))
+
                         print("\n💭 Thinking:")
-                        print(thinking.replace("<think>", "").strip())
+                        print(thinking_text)
+
+                    # Count answer tokens
+                    answer_tokens = len(tokenizer.encode(answer, add_special_tokens=False))
 
                     print("\n💬 Response:")
                     print(answer)
                 else:
                     print("\nResponse:")
-                    print(response[len(user_input):].strip())
+                    clean_response = response[len(user_input):].strip()
+                    print(clean_response)
+                    answer_tokens = len(tokenizer.encode(clean_response, add_special_tokens=False))
             else:
                 print("\nResponse:")
-                print(response[len(user_input):].strip())
+                clean_response = response[len(user_input):].strip()
+                print(clean_response)
+                answer_tokens = len(tokenizer.encode(clean_response, add_special_tokens=False))
 
+            # Always show performance stats in interactive mode
+            print("\n" + "─" * 40)
+            print("📊 Performance Stats:")
+            print(f"  • Input tokens: {input_token_count}")
+            print(f"  • Output tokens: {output_tokens}")
+            if thinking_tokens > 0:
+                print(f"    - Thinking: {thinking_tokens} tokens")
+                print(f"    - Answer: {answer_tokens} tokens")
+            print(f"  • Generation time: {gen_time:.2f}s")
+            print(f"  • Speed: {output_tokens/gen_time:.1f} tokens/s")
+            if gen_time > 0:
+                print(f"  • Time to first token: ~{gen_time/output_tokens:.3f}s")
+
+            # Show memory usage if verbose
             if args.verbose:
-                print(f"\n⏱️  Time: {gen_time:.2f}s ({args.max_tokens/gen_time:.1f} tokens/s)")
+                import psutil
+                proc = psutil.Process()
+                mem_info = proc.memory_info()
+                print(f"  • Memory: {mem_info.rss / (1024**3):.1f}GB RAM")
+                if torch.cuda.is_available():
+                    print(f"  • VRAM: {torch.cuda.memory_allocated(0) / (1024**3):.1f}GB")
 
         except KeyboardInterrupt:
-            print("\n\nInterrupted. Type 'quit' to exit.")
+            print("\n\n⚠️  Generation interrupted!")
+            response = input("Type 'quit' to exit, or press Enter to continue: ")
+            if response.lower() in ['quit', 'exit', 'q']:
+                break
             continue
         except Exception as e:
             print(f"\n❌ Error during generation: {e}")
@@ -1461,17 +1974,30 @@ CACHING (ENABLED BY DEFAULT!):
   First run: Creates cache automatically (30-60 min + cache creation)
   Next runs: Loads from cache in <1 minute! (30-50x faster)
 
-  IMPORTANT: Caching only works with CPU-only mode (--load-strategy no-gpu)
-  Hybrid GPU+CPU loading cannot be cached due to memory hooks
+  MEMORY-EFFICIENT CACHING:
+  • CPU mode with IPEX (default): Uses torch.save (memory efficient!)
+  • CPU mode with --no-ipex: Uses pickle (needs 3x model size in RAM)
+  • Hybrid GPU+CPU: Cannot be cached (model hooks prevent serialization)
 
-  %(prog)s --load-strategy no-gpu  # CPU-only (cacheable!)
+  CACHE COMMANDS:
+  %(prog)s --load-strategy no-gpu  # CPU-only (best for caching)
+  %(prog)s --cache-dir /path       # Custom cache location
   %(prog)s --bypass-cache          # Disable caching (always load fresh)
   %(prog)s --clear-cache           # Clear cache and exit
   %(prog)s --rebuild-cache         # Force rebuild cache
+  %(prog)s --check                 # Check cache status
 
 LOAD TIME:
   Without cache: 30-60 minutes (9 shards × 4.5GB each)
   With cache: <1 minute! (CPU-only mode after first run)
+
+CHECKPOINTING (NEW!):
+  Saves intermediate states during long CPU loading:
+  • After shard loading (~50 min): Can resume if repacking fails
+  • After CPU repacking (~15 min): Can resume from fully loaded state
+
+  %(prog)s --clear-checkpoints     # Clear saved checkpoints
+  %(prog)s --no-checkpoint         # Disable checkpoint save/load
         """)
 
     # Model configuration
@@ -1513,6 +2039,8 @@ LOAD TIME:
                         help="Test dependencies and exit")
     parser.add_argument("--dry-run", action="store_true",
                         help="Show loading strategy without actually loading model")
+    parser.add_argument("--diagnose", action="store_true",
+                        help="Run diagnostic test after loading to check if model works")
 
     # Performance testing
     parser.add_argument("--perf-test", action="store_true",
@@ -1551,12 +2079,22 @@ LOAD TIME:
                         help="Force online mode (allow network access)")
 
     # Caching options
+    parser.add_argument("--cache-dir", type=str, metavar="PATH",
+                        help="Custom directory for model cache (default: ~/.cache/qwen3_models)")
     parser.add_argument("--bypass-cache", action="store_true", default=False,
                         help="Disable fast caching (always load from scratch)")
     parser.add_argument("--rebuild-cache", action="store_true",
                         help="Rebuild cache even if it exists")
+    parser.add_argument("--force-cache", action="store_true",
+                        help="Force loading from cache even if memory seems insufficient")
     parser.add_argument("--clear-cache", action="store_true",
                         help="Clear model cache and exit")
+    parser.add_argument("--clear-checkpoints", action="store_true",
+                        help="Clear intermediate checkpoints and exit")
+    parser.add_argument("--use-checkpoint", action="store_true", default=True,
+                        help="Use intermediate checkpoints if available (default: True)")
+    parser.add_argument("--no-checkpoint", action="store_false", dest="use_checkpoint",
+                        help="Disable intermediate checkpoint usage")
     parser.add_argument("--create-cache-only", action="store_true",
                         help="Create cache file and exit (useful for sharing with others)")
     parser.add_argument("--cache-output", type=str, metavar="PATH",
@@ -1579,8 +2117,17 @@ LOAD TIME:
 
     # Handle cache operations
     if args.clear_cache:
-        cache = ModelCache()
+        cache_dir = get_cache_directory(args)
+        cache = ModelCache(cache_dir)
         cache.clear()
+        print(f"Cache directory: {cache_dir}")
+        return 0
+
+    # Handle checkpoint clearing
+    if args.clear_checkpoints:
+        cache_dir = get_cache_directory(args)
+        checkpoint_mgr = CheckpointManager(cache_dir)
+        checkpoint_mgr.clear_checkpoints()
         return 0
 
     # Create cache only mode
@@ -1608,7 +2155,8 @@ LOAD TIME:
             model, tokenizer = load_model(args)
 
             # Save to cache
-            cache = ModelCache()
+            cache_dir = get_cache_directory(args)
+            cache = ModelCache(cache_dir)
             is_ipex = hasattr(model, '_ipex_optimized') and model._ipex_optimized
             success = cache.save(model, tokenizer, args.model, device_type, is_ipex_optimized=is_ipex)
 
@@ -1668,38 +2216,55 @@ LOAD TIME:
 
     # Check cache mode
     if args.check:
+        # Check HuggingFace cache
         is_cached, cache_path, cache_size = check_model_cache(args.model)
+        print("HuggingFace Cache:")
         if is_cached:
-            print(f"✅ Model cached at: {cache_path}")
-            print(f"   Size: {cache_size / (1024**3):.1f}GB")
+            print(f"  ✅ Model cached at: {cache_path}")
+            print(f"     Size: {cache_size / (1024**3):.1f}GB")
             shards = list(cache_path.glob("model-*.safetensors"))
-            print(f"   Shards: {len(shards)}")
+            print(f"     Shards: {len(shards)}")
         else:
-            print("❌ Model not cached. Will download on first run.")
+            print("  ❌ Model not cached. Will download on first run.")
+
+        # Check our custom fast-load cache
+        cache_dir = get_cache_directory(args)
+        cache = ModelCache(cache_dir)
+        print(f"\nFast-Load Cache (at {cache_dir}):")
+
+        for device_type in ["cpu", "cuda"]:
+            if cache.is_cached(args.model, device_type):
+                paths = cache.get_cache_paths(args.model, device_type)
+                if paths['model'].exists():
+                    size_gb = paths['model'].stat().st_size / (1024**3)
+                    print(f"  ✅ {device_type.upper()} cache: {size_gb:.1f}GB")
+                    if paths['metadata'].exists():
+                        with open(paths['metadata'], 'r') as f:
+                            metadata = json.load(f)
+                            if metadata.get('is_ipex_optimized'):
+                                print(f"     IPEX-optimized: Yes")
+
+        if not cache.is_cached(args.model, "cpu") and not cache.is_cached(args.model, "cuda"):
+            print("  ❌ No fast-load cache found")
+
         return 0
 
     # Setup environment (disable GPTQModel early if not requested)
     setup_environment(args.threads, args.verbose, args.offline if args.offline is not None else False, args.use_gptq, args.load_strategy == "no-gpu")
 
+    # Display banner and common info for both dry-run and normal mode
+    display_banner(args.quiet)
+
+    # Display cache info
+    is_cached, cache_path, cache_size = display_cache_info(args.model, args.quiet)
+
+    # Display system resources
+    resources = display_system_resources(args.quiet)
+
     # Dry run mode - just show strategy and exit
     if args.dry_run:
-        import psutil
         print("\n🔍 Dry Run Mode - Analyzing Strategy")
         print("=" * 60)
-
-        # Show resources
-        total_ram = psutil.virtual_memory().total / (1024**3)
-        available_ram = psutil.virtual_memory().available / (1024**3)
-        print(f"📊 System Resources:")
-        print(f"   RAM: {total_ram:.1f}GB total, {available_ram:.1f}GB available")
-
-        if torch.cuda.is_available():
-            gpu_name = torch.cuda.get_device_name(0)
-            gpu_memory = torch.cuda.get_device_properties(0).total_memory / (1024**3)
-            print(f"   GPU: {gpu_name}")
-            print(f"   VRAM: {gpu_memory:.1f}GB")
-        else:
-            print(f"   GPU: Not available")
 
         # Show what strategy would be used
         print(f"\n🎯 Strategy: --load-strategy {args.load_strategy}")
@@ -1708,26 +2273,26 @@ LOAD TIME:
             print(f"\n📊 Would use: NO-GPU (CPU-only)")
             print(f"   All layers on CPU/RAM")
             print(f"   Memory: 0GB VRAM, ~50GB RAM")
-            if torch.cuda.is_available():
+            if resources['has_gpu']:
                 print(f"   GPU available but not used per request")
 
         elif args.load_strategy == "min-gpu" or args.load_strategy == "auto":
-            if torch.cuda.is_available() and gpu_memory >= 10:
+            if resources['has_gpu'] and resources['gpu_memory'] >= 10:
                 print(f"\n🔄 Would use: MIN-GPU (default)")
                 print(f"   Non-expert layers on GPU (~12GB)")
                 print(f"   Expert layers on CPU (~28GB)")
                 print(f"   Memory: ~12-14GB VRAM, ~40GB RAM")
             else:
                 print(f"\n📊 Would use: MIN-GPU → CPU-ONLY (fallback)")
-                if not torch.cuda.is_available():
+                if not resources['has_gpu']:
                     print(f"   No GPU detected")
                 else:
-                    print(f"   Insufficient VRAM ({gpu_memory:.1f}GB < 10GB)")
+                    print(f"   Insufficient VRAM ({resources['gpu_memory']:.1f}GB < 10GB)")
                 print(f"   All layers on CPU/RAM")
 
         elif args.load_strategy == "max-gpu":
-            if torch.cuda.is_available():
-                gpu_limit = args.gpu_memory or int(gpu_memory * 0.90)
+            if resources['has_gpu']:
+                gpu_limit = args.gpu_memory or int(resources['gpu_memory'] * 0.90)
                 print(f"\n🚀 Would use: MAX-GPU")
                 print(f"   Fill up to {gpu_limit}GB of VRAM")
                 if gpu_limit >= 35:
@@ -1744,6 +2309,10 @@ LOAD TIME:
         print("\nDry run complete. Use without --dry-run to actually load.")
         return 0
 
+    # Pass the cache and resource info to load_model to avoid duplicate display
+    args._cache_info = (is_cached, cache_path, cache_size)
+    args._resources = resources
+
     # Load model
     try:
         model, tokenizer = load_model(args)
@@ -1759,6 +2328,18 @@ LOAD TIME:
             import traceback
             traceback.print_exc()
         return 1
+
+    # Run diagnostic test if requested
+    if args.diagnose:
+        print("\n" + "=" * 60)
+        print("Diagnostic Mode")
+        print("=" * 60)
+        test_passed = test_model_responsiveness(model, tokenizer, args.verbose)
+        if not test_passed:
+            print("\n❌ Diagnostic test failed - model may not work properly")
+            return 1
+        print("\n✅ Diagnostic test passed - model is working")
+        return 0
 
     # Run mode - default to interactive if no mode specified
     try:

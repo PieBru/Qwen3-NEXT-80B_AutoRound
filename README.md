@@ -335,20 +335,20 @@ The IPEX cache system now includes:
 - **Team Sharing**: Export/verify checksums for collaboration
 - **Cache Size**: ~80-90GB (2x larger than original 41GB model due to FP16 expansion)
 
-#### Quick Start with IPEX Cache
+#### Quick Start with Integrated Caching
 
 ```bash
-# First run: Creates IPEX-optimized cache with progress bars
-python qwen3_80b_ipex_cache.py --interactive
+# CPU mode automatically uses IPEX optimization for memory-efficient caching
+python qwen3_80b.py --load-strategy no-gpu --interactive
 
-# Verify cache integrity
-python qwen3_80b_ipex_cache.py --verify-cache
+# Check cache status (shows both HuggingFace and fast-load cache)
+python qwen3_80b.py --check
 
-# Export checksums for team sharing
-python qwen3_80b_ipex_cache.py --export-checksums team_checksums.json
+# Use custom cache directory for large models
+python qwen3_80b.py --cache-dir /mnt/large_drive/model_cache
 
-# Force rebuild if corrupted
-python qwen3_80b_ipex_cache.py --rebuild
+# Force rebuild cache
+python qwen3_80b.py --rebuild-cache
 ```
 
 #### Progress Indicators
@@ -617,20 +617,25 @@ python qwen3_80b.py --clear-cache --rebuild-cache
 
 ### Alternative: Direct IPEX Loading (No Cache)
 
-If you're running into memory issues with the IPEX cache, consider skipping caching:
+If you're running into memory issues during cache creation:
 
 ```bash
-# Use IPEX optimization without caching (slower initial load, less memory spike)
-python qwen3_80b_ipex_cache.py --interactive --no-cache
+# IPEX is enabled by default for memory-efficient caching
+python qwen3_80b.py --load-strategy no-gpu --interactive
+
+# Skip caching entirely if memory is too limited
+python qwen3_80b.py --load-strategy no-gpu --bypass-cache --interactive
+
+# Use custom cache directory on a larger drive
+python qwen3_80b.py --cache-dir /mnt/large_drive/cache --interactive
 
 # This approach:
-# - Takes 30-60 min to load each time
-# - Applies IPEX optimization on-the-fly
-# - Avoids the 200GB+ memory spike during cache loading
-# - Better for systems with exactly 128GB RAM
+# - IPEX uses torch.save (memory efficient, ~1x model size)
+# - Without IPEX, uses pickle (needs ~3x model size in RAM)
+# - Cache creation is automatic on first run
 ```
 
-The good news: **You only need the extra RAM once!** After the first run, the IPEX-optimized model loads directly from cache without any repacking.
+The good news: **You only need the extra RAM once!** After the first run, the IPEX-optimized model loads directly from cache in <1 minute without any repacking.
 
 ## Usage
 
