@@ -889,7 +889,6 @@ This is a bridge solution while waiting for llama.cpp integration. Once Qwen3-Ne
 ## Documentation
 
 Additional documentation is available in the `docs/` directory:
-- [CLAUDE.md](docs/CLAUDE.md) - Guidelines for Claude Code AI assistant
 - [LOADING_STRATEGIES.md](docs/LOADING_STRATEGIES.md) - Detailed loading strategy matrix
 - [OPTIMIZATIONS.md](docs/OPTIMIZATIONS.md) - Performance optimization guide
 - [PYTHON_SETUP.md](docs/PYTHON_SETUP.md) - Python environment setup instructions
