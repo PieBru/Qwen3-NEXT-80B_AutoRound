@@ -759,13 +759,50 @@ def load_model(args: argparse.Namespace):
                         if not args.quiet:
                             print(f"\n⚙️  Applying IPEX optimizations (not in cache)...")
                             print(f"   This may take several minutes for the 80B model")
+                            print(f"   Progress: ", end="", flush=True)
 
+                        # Run IPEX optimization in a thread so we can show progress
+                        import threading
+                        ipex_done = False
+                        ipex_error = None
+                        optimized_model = None
+
+                        def run_ipex():
+                            nonlocal optimized_model, ipex_error, ipex_done
+                            try:
+                                optimized_model = ipex.optimize(model, dtype=torch.float16 if not args.fp32 else torch.float32)
+                            except Exception as e:
+                                ipex_error = e
+                            finally:
+                                ipex_done = True
+
+                        ipex_thread = threading.Thread(target=run_ipex)
                         ipex_start = time.time()
-                        model = ipex.optimize(model, dtype=torch.float16 if not args.fp32 else torch.float32)
+                        ipex_thread.start()
+
+                        # Show progress dots while IPEX is running
+                        dot_count = 0
+                        while not ipex_done:
+                            if not args.quiet:
+                                print(".", end="", flush=True)
+                                dot_count += 1
+                                if dot_count % 60 == 0:  # New line every 60 dots (roughly every minute)
+                                    elapsed = time.time() - ipex_start
+                                    print(f" [{elapsed:.0f}s]")
+                                    print("            ", end="", flush=True)  # Indent continuation
+                            time.sleep(1)  # Check every second
+
+                        ipex_thread.join()
                         ipex_elapsed = time.time() - ipex_start
 
+                        if ipex_error:
+                            raise ipex_error
+
+                        model = optimized_model
+
                         if not args.quiet:
-                            print(f"   ✅ IPEX applied in {ipex_elapsed:.1f}s - 2-4x inference speedup!")
+                            print(f" done! [{ipex_elapsed:.1f}s]")
+                            print(f"   ✅ IPEX applied - 2-4x inference speedup!")
                     except ImportError:
                         if args.verbose:
                             print("   ℹ️  IPEX not available")
@@ -1284,19 +1321,54 @@ def load_model(args: argparse.Namespace):
                     print(f"   ⚠️  WARNING: Only {total_available:.1f}GB available for IPEX (needs ~{IPEX_REQUIREMENT}GB more)")
                     print(f"      Process may be slow (using swap) or killed (OOM)")
 
-                print(f"   Note: Model already repacked by transformers, IPEX optimizing further...")
+                print(f"   Progress: ", end="", flush=True)
 
-            # Optimize model for CPU inference
+            # Run IPEX optimization in a thread so we can show progress
+            import threading
+            ipex_done = False
+            ipex_error = None
+            optimized_model = None
+
+            def run_ipex():
+                nonlocal optimized_model, ipex_error, ipex_done
+                try:
+                    optimized_model = ipex.optimize(model, dtype=torch.float16 if not args.fp32 else torch.float32)
+                except Exception as e:
+                    ipex_error = e
+                finally:
+                    ipex_done = True
+
+            ipex_thread = threading.Thread(target=run_ipex)
             ipex_start = time.time()
-            model = ipex.optimize(model, dtype=torch.float16 if not args.fp32 else torch.float32)
+            ipex_thread.start()
+
+            # Show progress dots while IPEX is running
+            dot_count = 0
+            while not ipex_done:
+                if not args.quiet:
+                    print(".", end="", flush=True)
+                    dot_count += 1
+                    if dot_count % 60 == 0:  # New line every 60 dots (roughly every minute)
+                        elapsed = time.time() - ipex_start
+                        print(f" [{elapsed:.0f}s]")
+                        print("            ", end="", flush=True)  # Indent continuation
+                time.sleep(1)  # Check every second
+
+            ipex_thread.join()
             ipex_time = time.time() - ipex_start
+
+            if ipex_error:
+                raise ipex_error
+
+            model = optimized_model
             ipex_applied = True
 
             if not args.quiet:
+                print(f" done! [{ipex_time:.1f}s]")
                 # Show memory after IPEX
                 mem_after = psutil.Process().memory_info().rss / (1024**3)
                 swap_after = psutil.swap_memory().used / (1024**3)
-                print(f"   ✅ IPEX optimization complete in {ipex_time:.1f}s")
+                print(f"   ✅ IPEX optimization complete")
                 print(f"   Memory after IPEX: {mem_after:.1f}GB RAM, {swap_after:.1f}GB swap")
                 print(f"   Expecting 2-4x inference speedup!")
         except ImportError as e:
