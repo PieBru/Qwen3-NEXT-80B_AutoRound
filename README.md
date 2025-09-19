@@ -247,7 +247,7 @@ The INT4 quantized model requires either:
 ./qwen3_80b.py --use-gptq       # For 30GB+ VRAM (multi-GPU)
 ```
 
-See [LOADING_STRATEGIES.md](LOADING_STRATEGIES.md) for complete resource matrix.
+See [LOADING_STRATEGIES.md](docs/LOADING_STRATEGIES.md) for complete resource matrix.
 
 ## Fast Caching System 🚀 (Default for CPU Mode)
 
@@ -885,6 +885,15 @@ If you see: `Better backend is found, please install all the following requireme
 ## Note
 
 This is a bridge solution while waiting for llama.cpp integration. Once Qwen3-Next is supported in llama.cpp, this project will  eventually be deprecated.
+
+## Documentation
+
+Additional documentation is available in the `docs/` directory:
+- [CLAUDE.md](docs/CLAUDE.md) - Guidelines for Claude Code AI assistant
+- [LOADING_STRATEGIES.md](docs/LOADING_STRATEGIES.md) - Detailed loading strategy matrix
+- [OPTIMIZATIONS.md](docs/OPTIMIZATIONS.md) - Performance optimization guide
+- [PYTHON_SETUP.md](docs/PYTHON_SETUP.md) - Python environment setup instructions
+- [FIX_WARNINGS.md](docs/FIX_WARNINGS.md) - Troubleshooting common warnings
 
 ## Contributing
 
