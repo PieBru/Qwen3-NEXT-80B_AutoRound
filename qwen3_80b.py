@@ -486,11 +486,18 @@ class ModelCache:
 
                 # We have enough memory, proceed with loading
                 if TQDM_AVAILABLE:
-                    pbar.set_description("Loading pickle cache (may use lots of RAM)")
+                    # Temporarily close progress bar to print messages cleanly
+                    pbar.close()
 
                 print(f"   ⚠️  Loading {cache_size_gb:.1f}GB pickle cache...")
                 print(f"   Available memory: {available_memory:.1f}GB (sufficient)")
                 print(f"   This may take a few minutes and use significant RAM")
+
+                if TQDM_AVAILABLE:
+                    # Recreate progress bar for the actual loading
+                    pbar = tqdm(total=5, desc="Loading pickle cache", unit="step",
+                               bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]')
+                    pbar.update(2)  # Update to step 3 since we already did metadata and tokenizer
 
                 try:
                     with open(paths['model'], 'rb') as f:
@@ -503,10 +510,14 @@ class ModelCache:
                     print("   ✅ Model loaded from pickle cache!")
 
                 except MemoryError:
+                    if TQDM_AVAILABLE:
+                        pbar.close()
                     print("   ❌ Out of memory while loading pickle cache!")
                     print("   Try adding more swap space or use --bypass-cache")
                     return None, None
                 except Exception as e:
+                    if TQDM_AVAILABLE:
+                        pbar.close()
                     print(f"   ❌ Failed to load pickle cache: {e}")
                     return None, None
 
