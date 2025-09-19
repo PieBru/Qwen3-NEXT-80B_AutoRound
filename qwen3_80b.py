@@ -138,14 +138,10 @@ class CheckpointManager:
                 # weights_only=False because we're loading full checkpoint with config, not just weights
                 checkpoint_data = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
 
-                # Check if checkpoint is recent (less than 24 hours old)
-                age_hours = (time.time() - checkpoint_data.get('timestamp', 0)) / 3600
-                if age_hours < 24:
-                    print(f"   ✅ Checkpoint is {age_hours:.1f} hours old (fresh)")
-                    return checkpoint_data
-                else:
-                    print(f"   ⚠️  Checkpoint is {age_hours:.1f} hours old (stale)")
-                    return None
+                # Since we only support one model, checkpoints don't expire
+                # Users can manually clear them with --clear-checkpoints if needed
+                print(f"   ✅ Checkpoint loaded successfully")
+                return checkpoint_data
 
             except Exception as e:
                 print(f"   ❌ Failed to load checkpoint")
