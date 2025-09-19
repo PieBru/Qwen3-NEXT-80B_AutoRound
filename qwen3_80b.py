@@ -900,7 +900,7 @@ def apply_ipex_optimization(model, args):
                 dtype = torch.float32 if args.fp32 else torch.float16
                 try:
                     optimized_model = ipex.optimize(model, dtype=dtype)
-                except RuntimeError as e:
+                except (RuntimeError, AssertionError) as e:
                     error_msg = str(e).lower()
                     # Check for AVX instruction set issues
                     if ("avx_ne_convert" in error_msg or "avx512_core_fp16" in error_msg
@@ -936,12 +936,17 @@ def apply_ipex_optimization(model, args):
         ipex_time = time.time() - ipex_start
 
         if ipex_error:
-            raise ipex_error
-
-        if not args.quiet:
-            print(f" done! [{ipex_time:.1f}s]")
-            # Show memory after IPEX
-            mem_after = psutil.Process().memory_info().rss / (1024**3)
+            # Log the error but don't lose the model
+            if not args.quiet:
+                print(f"\n   ⚠️  IPEX optimization failed: {ipex_error}")
+                print(f"      Continuing without IPEX speedup")
+            model = model  # Keep original model
+        elif optimized_model is not None:
+            model = optimized_model
+            if not args.quiet:
+                print(f" done! [{ipex_time:.1f}s]")
+                # Show memory after IPEX
+                mem_after = psutil.Process().memory_info().rss / (1024**3)
             swap_after = psutil.swap_memory().used / (1024**3)
             print(f"   ✅ IPEX optimization complete")
             print(f"   Memory after IPEX: {mem_after:.1f}GB RAM, {swap_after:.1f}GB swap")
@@ -1063,9 +1068,13 @@ def load_model(args: argparse.Namespace):
                         ipex_elapsed = time.time() - ipex_start
 
                         if ipex_error:
-                            raise ipex_error
-
-                        model = optimized_model
+                            # Log the error but don't lose the model
+                            if not args.quiet:
+                                print(f"\n   ⚠️  IPEX optimization failed: {ipex_error}")
+                                print(f"      Continuing without IPEX speedup")
+                            # Keep the original model
+                        elif optimized_model is not None:
+                            model = optimized_model
 
                         if not args.quiet:
                             print(f" done! [{ipex_elapsed:.1f}s]")
@@ -1643,7 +1652,7 @@ def load_model(args: argparse.Namespace):
                     dtype = torch.float32 if args.fp32 else torch.float16
                     try:
                         optimized_model = ipex.optimize(model, dtype=dtype)
-                    except RuntimeError as e:
+                    except (RuntimeError, AssertionError) as e:
                         error_msg = str(e).lower()
                         # Check for AVX instruction set issues
                         if ("avx_ne_convert" in error_msg or "avx512_core_fp16" in error_msg
@@ -1679,10 +1688,20 @@ def load_model(args: argparse.Namespace):
             ipex_time = time.time() - ipex_start
 
             if ipex_error:
-                raise ipex_error
-
-            model = optimized_model
-            ipex_applied = True
+                # Log the error but don't lose the model
+                if not args.quiet:
+                    print(f"\n   ⚠️  IPEX optimization failed: {ipex_error}")
+                    print(f"      Continuing without IPEX speedup")
+                ipex_applied = False
+                # Keep the original model
+            elif optimized_model is not None:
+                model = optimized_model
+                ipex_applied = True
+            else:
+                # IPEX failed but we still have the original model
+                if not args.quiet:
+                    print("\n   ⚠️  IPEX optimization failed, continuing with original model")
+                ipex_applied = False
 
             if not args.quiet:
                 print(f" done! [{ipex_time:.1f}s]")
