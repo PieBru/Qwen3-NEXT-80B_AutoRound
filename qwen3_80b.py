@@ -140,7 +140,11 @@ class CheckpointManager:
                     return None
 
             except Exception as e:
-                print(f"   ❌ Failed to load checkpoint: {e}")
+                print(f"   ❌ Failed to load checkpoint")
+                print(f"      Error type: {type(e).__name__}")
+                print(f"      Details: {str(e)}")
+                if 'torch' in str(e).lower():
+                    print(f"      Hint: The checkpoint may be corrupted. Try deleting it and regenerating.")
                 return None
         return None
 
@@ -170,8 +174,9 @@ def accelerate_shard_loading() -> None:
     if "OMP_NUM_THREADS" not in os.environ:
         num_threads = os.cpu_count()
         if num_threads:
-            # Use 75% of available threads for loading
-            loading_threads = max(4, int(num_threads * 0.75))
+            # Use configured percentage of available threads for loading
+            from config import PERFORMANCE
+            loading_threads = max(4, int(num_threads * PERFORMANCE['loading_thread_ratio']))
             os.environ["OMP_NUM_THREADS"] = str(loading_threads)
             torch.set_num_threads(loading_threads)
             if not "--quiet" in sys.argv and "-q" not in sys.argv:
@@ -199,9 +204,11 @@ class ModelCache:
                 'swap_total': swap.total / (1024**3),
                 'swap_used': swap.used / (1024**3)
             }
-        except ImportError:
-            return {'ram_free': 0, 'ram_total': 0, 'ram_used': 0,
-                   'swap_free': 0, 'swap_total': 0, 'swap_used': 0}
+        except ImportError as e:
+            # Raise a more informative error instead of silently returning zeros
+            raise ImportError(
+                "psutil is required for memory monitoring. Install with: pip install psutil"
+            ) from e
 
     def get_cache_paths(self, model_name: str, device_type: str, is_raw: bool = False) -> Dict[str, Path]:
         """Get cache file paths"""
@@ -336,7 +343,11 @@ class ModelCache:
             return model, tokenizer
 
         except Exception as e:
-            print(f"   ❌ Failed to load raw checkpoint: {e}")
+            print(f"   ❌ Failed to load raw checkpoint")
+            print(f"      Error type: {type(e).__name__}")
+            print(f"      Details: {str(e)}")
+            if 'metadata' in str(e).lower():
+                print(f"      Hint: The cache metadata may be corrupted. Try deleting the cache.")
             return None, None
 
     def save(self, model: Any, tokenizer: Any, model_name: str, device_type: str, is_ipex_optimized: bool = False) -> bool:
@@ -602,7 +613,11 @@ class ModelCache:
                     return None, None
                 except Exception as e:
                     print(" failed!")
-                    print(f"   ❌ Failed to load pickle cache: {e}")
+                    print(f"   ❌ Failed to load pickle cache")
+                    print(f"      Error type: {type(e).__name__}")
+                    print(f"      Details: {str(e)}")
+                    if 'pickle' in str(e).lower() or 'unpickling' in str(e).lower():
+                        print(f"      Hint: The pickle cache may be corrupted or incompatible. Try regenerating it.")
                     return None, None
 
             # IPEX models are now loaded without progress bar
@@ -616,11 +631,12 @@ class ModelCache:
             if mem_final['swap_used'] > 0.5:
                 print(f"   💿 Swap in use: {mem_final['swap_used']:.1f}GB")
 
-            # Only show speedup if it's actually fast (under 2 minutes)
-            if load_time < 120:
-                speedup = 2700 / load_time  # 45 minutes avg = 2700 seconds
+            # Only show speedup if it's actually fast
+            from config import PERFORMANCE
+            if load_time < PERFORMANCE['fast_load_threshold_seconds']:
+                speedup = PERFORMANCE['baseline_load_time_seconds'] / load_time
                 print(f"   ⚡ That's {speedup:.0f}x faster than loading from scratch!")
-            elif load_time > 600:
+            elif load_time > PERFORMANCE['slow_load_threshold_seconds']:
                 print(f"   ⚠️  Cache loading was slow ({load_time/60:.1f} minutes) - likely due to swap usage")
 
             return model, tokenizer
@@ -1173,7 +1189,8 @@ def load_model(args: argparse.Namespace):
             if not args.no_ipex and total_available < IPEX_PEAK_REQUIREMENT:
                 memory_warning = f"Only {total_available:.1f}GB available (RAM+swap), need ~{IPEX_PEAK_REQUIREMENT}GB for IPEX"
                 # Suggest swap setup
-                memory_warning += " - consider 256GB swap or use --no-ipex"
+                from config import MEMORY_REQUIREMENTS
+                memory_warning += f" - consider {MEMORY_REQUIREMENTS['ipex_swap_recommended']}GB swap or use --no-ipex"
             elif not args.no_ipex and swap_free > 0 and available_ram < 120:
                 memory_warning = "IPEX will use swap during optimization (normal for first run)"
             elif available_ram < MIN_RAM_FOR_CPU and swap_total == 0:
@@ -1292,7 +1309,8 @@ def load_model(args: argparse.Namespace):
                 print(f"   • IPEX optimization: needs ~{ipex_peak}GB peak (one-time)")
                 total_available_mem = total_ram + swap_total
                 if total_available_mem < ipex_peak:
-                    print(f"   • ⚠️  Consider 256GB swap for IPEX (you have {total_available_mem:.0f}GB total)")
+                    from config import MEMORY_REQUIREMENTS
+                    print(f"   • ⚠️  Consider {MEMORY_REQUIREMENTS['ipex_swap_recommended']}GB swap for IPEX (you have {total_available_mem:.0f}GB total)")
             print(f"   • Monitor: 'htop' shows 1 CPU at 100% (library limitation)")
 
             # Show any memory warnings

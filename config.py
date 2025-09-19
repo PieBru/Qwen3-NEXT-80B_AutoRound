@@ -57,6 +57,10 @@ PERFORMANCE = {
     "batch_size": 1,
     "num_threads": None,  # Auto-detect
     "torch_compile": False,  # Experimental
+    "loading_thread_ratio": 0.75,  # Use 75% of threads for loading
+    "fast_load_threshold_seconds": 120,  # Consider load fast if under 2 minutes
+    "slow_load_threshold_seconds": 600,  # Warn if load takes over 10 minutes
+    "baseline_load_time_seconds": 2700,  # 45 minutes average load from scratch
 }
 
 # System Detection Thresholds
@@ -121,11 +125,11 @@ def validate_system_memory(available_ram: float, available_gpu: float = 0) -> Di
         result["suggestions"].append("Hybrid GPU+CPU loading recommended")
     else:
         result["recommended_strategy"] = "no-gpu"
-        if available_ram >= MEMORY_REQUIREMENTS["ipex_peak_memory"]:
+        if available_ram >= MEMORY_REQUIREMENTS["ipex_total_required"]:
             result["suggestions"].append("Consider using IPEX for CPU optimization")
         else:
             result["warnings"].append("Limited RAM may cause slow performance")
-            result["suggestions"].append(f"Increase swap to {MEMORY_REQUIREMENTS['swap_recommended']}GB for better performance")
+            result["suggestions"].append(f"Increase swap to {MEMORY_REQUIREMENTS['ipex_swap_recommended']}GB for better performance")
 
     return result
 
