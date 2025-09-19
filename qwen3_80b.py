@@ -362,37 +362,15 @@ class ModelCache:
         start_time = time.time()
 
         try:
-            # Setup progress bar if available
-            if TQDM_AVAILABLE:
-                pbar = tqdm(total=5, desc="Loading cache", unit="step",
-                           bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}] Mem: {postfix}')
-
-            # Step 1: Load metadata
-            if TQDM_AVAILABLE:
-                mem = self.get_memory_status()
-                pbar.set_postfix_str(f"{mem['ram_free']:.1f}GB free")
-                pbar.set_description("Loading metadata")
-
+            # Step 1: Load metadata (instant - no progress bar needed)
             with open(paths['metadata'], 'r') as f:
                 metadata = json.load(f)
 
             if metadata.get('cache_version') != CACHE_VERSION:
                 print(f"   ⚠️  Cache version mismatch, rebuilding...")
-                if TQDM_AVAILABLE:
-                    pbar.close()
                 return None, None
 
-            if TQDM_AVAILABLE:
-                pbar.update(1)
-
-            # Step 2: Load tokenizer
-            if TQDM_AVAILABLE:
-                mem = self.get_memory_status()
-                pbar.set_postfix_str(f"{mem['ram_free']:.1f}GB free")
-                pbar.set_description("Loading tokenizer")
-            else:
-                print("   Loading tokenizer...")
-
+            # Step 2: Load tokenizer (almost instant - no progress bar needed)
             from transformers import AutoTokenizer
             tokenizer = AutoTokenizer.from_pretrained(
                 paths['tokenizer'],
@@ -400,19 +378,11 @@ class ModelCache:
                 trust_remote_code=True
             )
 
-            if TQDM_AVAILABLE:
-                pbar.update(1)
-
             # Step 3-5: Load model - check if IPEX-optimized
             if metadata.get('is_ipex_optimized', False):
-                # IPEX-optimized model loading - try memory-efficient approach
-                if TQDM_AVAILABLE:
-                    mem = self.get_memory_status()
-                    pbar.set_postfix_str(f"{mem['ram_free']:.1f}GB free, {mem['ram_used']:.1f}GB used")
-                    pbar.set_description("Loading IPEX config")
-                else:
-                    print("   Loading IPEX model from cache...")
-                    print("   ⚠️  This 80-90GB cache requires careful memory management")
+                # IPEX-optimized model loading
+                print("   Loading IPEX model from cache...")
+                print("   ⚠️  This 80-90GB cache requires careful memory management")
 
                 # First, try to load with memory mapping
                 try:
@@ -429,13 +399,8 @@ class ModelCache:
                 # Extract just the config first
                 config = AutoConfig.from_dict(checkpoint['model_config'])
 
-                if TQDM_AVAILABLE:
-                    pbar.update(1)
-                    mem = self.get_memory_status()
-                    pbar.set_postfix_str(f"{mem['ram_free']:.1f}GB free, {mem['ram_used']:.1f}GB used")
-                    pbar.set_description("Creating model structure")
-
                 # Create model with low memory usage flag
+                print("   Creating model structure...")
                 model = AutoModelForCausalLM.from_config(
                     config,
                     trust_remote_code=True,
@@ -443,13 +408,8 @@ class ModelCache:
                     low_cpu_mem_usage=True  # Important for memory efficiency
                 )
 
-                if TQDM_AVAILABLE:
-                    pbar.update(1)
-                    mem = self.get_memory_status()
-                    pbar.set_postfix_str(f"{mem['ram_free']:.1f}GB free, {mem['ram_used']:.1f}GB used")
-                    pbar.set_description("Loading weights (this may take a while)")
-
                 # Load state dict with strict=False to be more flexible
+                print("   Loading weights (this may take a while)...")
                 model.load_state_dict(checkpoint['model_state_dict'], strict=False)
 
                 # Aggressively clean up checkpoint
@@ -457,9 +417,6 @@ class ModelCache:
                 del checkpoint
                 gc.collect()
                 torch.cuda.empty_cache() if torch.cuda.is_available() else None
-
-                if TQDM_AVAILABLE:
-                    pbar.update(1)
 
             else:
                 # Standard pickle loading - check if we have enough memory
@@ -471,11 +428,6 @@ class ModelCache:
                 required_memory = cache_size_gb * 2
 
                 if available_memory < required_memory:
-                    if TQDM_AVAILABLE:
-                        pbar.clear()  # Clear the progress bar line
-                        pbar.close()  # Close the progress bar
-                        print("", flush=True)  # Add newline for clean output
-
                     print(f"   ⚠️  Insufficient memory for pickle cache!")
                     print(f"   Cache size: {cache_size_gb:.1f}GB")
                     print(f"   Required: ~{required_memory:.1f}GB (2x cache size)")
@@ -487,13 +439,6 @@ class ModelCache:
                     return None, None
 
                 # We have enough memory, proceed with loading
-                if TQDM_AVAILABLE:
-                    # Clear the progress bar line and close it
-                    pbar.clear()  # Clear the progress bar line
-                    pbar.close()  # Close the progress bar
-                    # Add a newline to ensure clean output
-                    print("", flush=True)
-
                 print(f"   ⚠️  Loading {cache_size_gb:.1f}GB pickle cache...")
                 print(f"   Available memory: {available_memory:.1f}GB (sufficient)")
                 print(f"   This may take a few minutes and use significant RAM")
@@ -520,9 +465,7 @@ class ModelCache:
                     print(f"   ❌ Failed to load pickle cache: {e}")
                     return None, None
 
-            # Close progress bar if it's still open and we have IPEX model
-            if TQDM_AVAILABLE and metadata.get('is_ipex_optimized', False):
-                pbar.close()
+            # IPEX models are now loaded without progress bar
 
             load_time = time.time() - start_time
 
@@ -540,8 +483,6 @@ class ModelCache:
             return model, tokenizer
 
         except Exception as e:
-            if TQDM_AVAILABLE and 'pbar' in locals():
-                pbar.close()
             print(f"   ❌ Cache loading failed: {e}")
             print(f"   Will rebuild cache...")
             import shutil
