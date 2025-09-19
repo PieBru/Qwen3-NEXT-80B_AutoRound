@@ -137,10 +137,10 @@ low_cpu_mem_usage = True
 ### For 16GB VRAM + 64GB RAM (Common Setup)
 ```bash
 # Option 1: CPU-only (stable)
-./qwen3_80b.py --cpu
+python qwen3_80b.py --load-strategy no-gpu
 
 # Option 2: Hybrid attempt (may fail)
-./qwen3_80b.py --gpu-memory 14 --cpu-memory 50
+python qwen3_80b.py --load-strategy min-gpu --gpu-memory 14
 
 # Option 3: Use GGUF format
 # Convert to GGUF and use llama.cpp
@@ -149,13 +149,13 @@ low_cpu_mem_usage = True
 ### For 24GB VRAM + 128GB RAM (Enthusiast)
 ```bash
 # Hybrid loading with good performance
-./qwen3_80b.py --gpu-memory 20 --cpu-memory 80
+python qwen3_80b.py --load-strategy max-gpu --gpu-memory 20
 ```
 
 ### For 48GB+ VRAM (Professional)
 ```bash
 # Full GPU loading
-./qwen3_80b.py --use-gptq --gpu-memory 40
+python qwen3_80b.py --load-strategy max-gpu --gpu-memory 40
 ```
 
 ## Key Insights

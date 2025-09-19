@@ -70,16 +70,12 @@ export PYTHON_GIL=0
    - Full-featured with all loading strategies
    - Interactive and benchmark modes
    - Thinking mode support (`--thinking`)
+   - Built-in performance benchmarking (`--perf-test`)
 
-2. **AutoRound Optimized**: `qwen3_80b_autoround_optimized.py`
-   - Uses AutoRound's native loading
-   - Support for Intel Extension for PyTorch (when compatible)
-   - Cleaner implementation focused on performance
-
-3. **Performance Check**: `optimize_performance.py`
-   - System diagnostics
-   - Performance benchmarks
-   - Optimization recommendations
+2. **Performance Scripts**: `scripts/`
+   - `benchmark_hardware.py` - Comprehensive hardware benchmark
+   - `optimize_performance.py` - System optimization recommendations
+   - `diagnose_loading_speed.py` - Diagnose slow loading issues
 
 ## Performance Tips
 
@@ -98,7 +94,7 @@ python qwen3_80b.py --no-warnings --quiet
 python qwen3_80b.py --load-strategy max-gpu --gpu-memory 14
 
 # Run benchmarks to test
-python qwen3_80b_autoround_optimized.py --benchmark
+python qwen3_80b.py --perf-test
 ```
 
 ### For Reliability

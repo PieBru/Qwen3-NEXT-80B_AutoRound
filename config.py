@@ -14,8 +14,13 @@ MODEL_SHORT_NAME = "Qwen3-80B"
 # Memory Requirements (in GB)
 MEMORY_REQUIREMENTS = {
     # Base model sizes
-    "model_quantized_size": 29,        # 4-bit quantized model on disk
-    "model_loaded_ram": 40,            # Model loaded in RAM (with overhead)
+    "model_quantized_size": 41,        # 4-bit quantized model on disk
+    "model_loaded_ram": 45,            # Model loaded in RAM (with overhead)
+
+    # Cache sizes
+    "cache_size_pickle": 80,           # Old pickle cache size (deprecated)
+    "cache_size_torch": 40,            # New torch.save cache size
+    "cache_raw_checkpoint": 40,        # Raw checkpoint cache before IPEX
 
     # Loading strategies
     "gpu_minimal": 10,                 # Minimum GPU memory for hybrid mode
@@ -23,23 +28,23 @@ MEMORY_REQUIREMENTS = {
     "gpu_full": 30,                    # Full GPU loading requirement
 
     # CPU requirements
-    "cpu_minimum_ram": 40,             # Minimum RAM for CPU-only mode
-    "cpu_recommended_ram": 50,         # Recommended RAM for comfortable operation
+    "cpu_minimum_ram": 45,             # Minimum RAM to run cached model
+    "cpu_recommended_ram": 128,        # Recommended RAM for comfortable operation
 
-    # IPEX optimization
-    "ipex_peak_memory": 230,           # Peak memory during IPEX optimization
-    "ipex_additional": 115,            # Additional memory needed during IPEX
-    "ipex_final_memory": 40,           # Memory after IPEX optimization
+    # IPEX optimization requirements
+    "ipex_total_required": 160,        # Total memory needed during IPEX optimization
+    "ipex_additional": 115,            # Additional memory beyond model size
+    "ipex_swap_recommended": 200,      # Recommended total (RAM+swap) for IPEX
 
-    # System recommendations
-    "swap_recommended": 256,           # Recommended swap for IPEX
+    # Running requirements after cache
+    "inference_ram_cached": 45,        # RAM needed to run from cache
     "inference_overhead": 5,           # Additional RAM for inference
 }
 
 # Cache Configuration
 CACHE_CONFIG = {
     "cache_dir": Path.home() / ".cache/qwen3_fast_loader",
-    "cache_version": "v3.0",
+    "cache_version": "v4.0",  # v4.0: torch.save with memory mapping
     "cache_timeout": 3600,  # 1 hour cache validity for temporary files
     "max_cache_size_gb": 100,  # Maximum cache size before cleanup
 }

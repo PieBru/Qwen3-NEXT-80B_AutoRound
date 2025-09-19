@@ -56,13 +56,13 @@ source .venv/bin/activate
 python --version  # Should show Python 3.12.x
 
 # 5. Install requirements with IPEX
-pip install -r requirements-py311-312.txt
+pip install -r setup/requirements-py311-312.txt
 ```
 
 ### Alternative: Use the Setup Script
 ```bash
 # This script handles everything for you
-./setup_python311_ipex.sh
+./setup/setup_python311_ipex.sh
 
 # It will:
 # - Install Python 3.11 or use existing
@@ -157,10 +157,10 @@ uv venv --python 3.12
 uv venv --python 3.11
 
 # Install IPEX-enabled requirements (for Python 3.11/3.12)
-uv pip install -r requirements-py311-312.txt
+uv pip install -r setup/requirements-py311-312.txt
 
 # Run with IPEX optimizations
-python qwen3_80b_ipex.py --interactive
+python qwen3_80b.py --interactive
 ```
 
 ## Why Python 3.12 for This Project?
@@ -174,8 +174,8 @@ python qwen3_80b_ipex.py --interactive
 
 For best performance with the Qwen3-80B model:
 1. Use Python 3.12 (or 3.11)
-2. Install IPEX with `requirements-py311-312.txt`
-3. Run with `qwen3_80b_ipex.py` for optimized inference
+2. Install IPEX with `setup/requirements-py311-312.txt`
+3. Run with `qwen3_80b.py` for optimized inference
 
 The key command you need:
 ```bash

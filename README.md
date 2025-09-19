@@ -10,7 +10,7 @@ git clone https://github.com/PieBru/Qwen3-NEXT-80B_AutoRound.git
 cd Qwen3-NEXT-80B_AutoRound
 
 # Option A: Python 3.11/3.12 (RECOMMENDED - 2-4x faster CPU inference with IPEX)
-./setup_python311_ipex.sh  # Complete setup with IPEX
+./setup/setup_python311_ipex.sh  # Complete setup with IPEX
 
 # Option B: Python 3.13+ (if already installed)
 pyenv install 3.13.3t
@@ -20,22 +20,22 @@ source .venv/bin/activate
 export PYTHON_GIL=0  # For Python 3.13 only
 
 # Install dependencies (auto-detects Python version)
-python install_requirements.py
+python setup/install_requirements.py
 
 # Authenticate with HuggingFace (required for model download)
 hf auth login
 
 # For Consumer Hardware (64-128GB RAM):
-./setup_swap.sh  # Auto-configures swap if needed for IPEX
+./manage_temporary_swap.sh create  # Auto-configure swap if needed for IPEX
 python qwen3_80b.py --load-strategy no-gpu --interactive
-# After first run: ./remove_swap.sh
+# After first run: ./manage_temporary_swap.sh remove
 
 # Quick Commands:
 python qwen3_80b.py --help           # See all options
 python qwen3_80b.py --test-deps      # Verify environment
 python qwen3_80b.py --thinking       # Show reasoning process
 python qwen3_80b.py --benchmark      # Run performance test
-python benchmark_hardware.py         # Detailed hardware benchmark
+python scripts/benchmark_hardware.py         # Detailed hardware benchmark
 ```
 
 ## Features
@@ -69,13 +69,13 @@ If you have a typical gaming PC or workstation with limited resources, this sect
 free -h  # Check RAM and swap
 
 # 2. If you have <80GB total (RAM + swap), run our auto-setup:
-./setup_swap.sh
+./manage_temporary_swap.sh create
 
 # 3. Run the model (IPEX will be applied automatically)
 python qwen3_80b.py --load-strategy no-gpu --interactive
 
 # 4. After first run completes, remove temporary swap:
-./remove_swap.sh  # Created by setup_swap.sh
+./manage_temporary_swap.sh remove  # Remove temporary swap
 
 # Future runs: Cached loading with just 45GB RAM (fast if in RAM, slower with swap)
 python qwen3_80b.py --load-strategy no-gpu --interactive
@@ -101,6 +101,34 @@ python qwen3_80b.py --load-strategy no-gpu --interactive
 
 **Bottom Line**: IPEX is NOT optional for consumer hardware - it's the difference between unusable (0.5 tok/s) and decent (3-5 tok/s) performance!
 
+## 📁 Project Structure
+
+```
+.
+├── qwen3_80b.py          # Main inference script (all features integrated)
+├── config.py             # Configuration settings
+├── manage_temporary_swap.sh  # Swap space management utility
+├── README.md             # This documentation
+├── LICENSE               # MIT license
+│
+├── setup/                # Installation and setup scripts
+│   ├── install_requirements.py      # Automatic dependency installer
+│   ├── setup_python311_ipex.sh     # Complete Python 3.11 + IPEX setup
+│   ├── requirements.txt            # Main requirements pointer
+│   ├── requirements-base.txt      # Common dependencies
+│   ├── requirements-py311-312.txt # Python 3.11/3.12 with IPEX
+│   └── requirements-py313.txt     # Python 3.13+ (no IPEX yet)
+│
+└── scripts/              # Performance analysis and benchmarking tools
+    ├── benchmark_hardware.py        # Comprehensive hardware benchmark
+    ├── cpu_benchmark.py            # CPU performance testing
+    ├── memory_benchmark.py         # Memory bandwidth analysis
+    ├── storage_benchmark.py        # Storage I/O testing
+    ├── performance_report.py       # Generate performance reports
+    ├── optimize_performance.py     # System optimization recommendations
+    └── diagnose_loading_speed.py  # Diagnose slow loading issues
+```
+
 ## Requirements
 
 ### Hardware Requirements
@@ -119,23 +147,25 @@ python qwen3_80b.py --load-strategy no-gpu --interactive
 
 ### 📁 Requirements Structure
 
-#### 1. **`requirements-base.txt`**
+All requirements files are located in the `setup/` directory:
+
+#### 1. **`setup/requirements-base.txt`**
 - Common dependencies that work across all Python versions
 - Includes Transformers, AutoRound, utilities
 
-#### 2. **`requirements-py311-312.txt`** (RECOMMENDED)
+#### 2. **`setup/requirements-py311-312.txt`** (RECOMMENDED)
 - For Python 3.11 and 3.12
 - **Includes Intel Extension for PyTorch (IPEX)**
 - Provides 2-4x CPU inference speedup
 - Optimal performance configuration
 
-#### 3. **`requirements-py313.txt`**
+#### 3. **`setup/requirements-py313.txt`**
 - For Python 3.13+
 - No IPEX support (not compatible with Python 3.13 yet)
 - Alternative optimizations included
 - Works with free-threaded Python builds
 
-#### 4. **`requirements.txt`**
+#### 4. **`setup/requirements.txt`**
 - Main file with instructions
 - Points to appropriate version-specific files
 - Minimal requirements for basic functionality
@@ -145,22 +175,22 @@ python qwen3_80b.py --load-strategy no-gpu --interactive
 #### Automatic Installation (Recommended)
 ```bash
 # Automatically detects Python version and installs appropriate dependencies
-python install_requirements.py
+python setup/install_requirements.py
 ```
 
 #### Manual Installation by Python Version
 ```bash
 # For Python 3.11 or 3.12 (best performance)
-pip install -r requirements-py311-312.txt
+pip install -r setup/requirements-py311-312.txt
 
 # For Python 3.13+
-pip install -r requirements-py313.txt
+pip install -r setup/requirements-py313.txt
 ```
 
 #### Setup Python 3.11 Environment for Best Performance
 ```bash
 # Complete setup script for Python 3.11 with IPEX
-./setup_python311_ipex.sh
+./setup/setup_python311_ipex.sh
 ```
 
 ### 📊 Performance Comparison
@@ -193,7 +223,7 @@ pip install -r requirements-py313.txt
 - **Mode:** CPU (due to <24GB VRAM limitation)
 - **Performance:** *Pending benchmark results*
 
-**Help us fill this table!** Run `python benchmark_hardware.py` and submit your results via PR or issue.
+**Help us fill this table!** Run `python scripts/benchmark_hardware.py` and submit your results via PR or issue.
 
 ### Key Benefits
 
@@ -296,8 +326,8 @@ python qwen3_80b.py --rebuild-cache --interactive
 # Disable cache temporarily (always load from scratch)
 python qwen3_80b.py --bypass-cache --interactive
 
-# Check cache performance
-python test_cache_performance.py
+# Check cache status
+python qwen3_80b.py --check
 ```
 
 ### Performance Comparison
@@ -305,20 +335,76 @@ python test_cache_performance.py
 | Loading Method | Strategy | Time | Cacheable |
 |---------------|----------|------|-----------|
 | CPU-only (no cache) | `--load-strategy no-gpu` | 30-60 minutes | ✅ Yes |
-| CPU-only (with cache) | `--load-strategy no-gpu` | 10-15 min** | ✅ Yes |
+| CPU-only (with cache, v4.0) | `--load-strategy no-gpu` | **1-2 minutes** | ✅ Yes |
 | Hybrid GPU+CPU | `--load-strategy min-gpu` | 30-60 minutes | ❌ No |
 | Full GPU | `--load-strategy max-gpu` | 30-60 minutes | ❌ No |
 
-\*\* **Reality check**: Cache loading with 128GB RAM typically takes 10-15 minutes due to the 80GB pickle requiring ~120GB during deserialization, forcing heavy swap usage.
+### Cache System v4.0 (Major Improvements)
+
+#### Key Improvements
+
+1. **torch.save instead of pickle** - All models now use torch.save format:
+   - Cache size: ~40GB (vs 80GB with pickle)
+   - Memory overhead: Only 1.5x (vs 3x with pickle)
+   - Supports memory-mapped loading (mmap=True)
+
+2. **Memory-mapped loading** - Files load directly from disk:
+   - No need to load entire 40GB into RAM at once
+   - OS handles paging efficiently
+   - Minimal swap usage even with limited RAM
+
+3. **Automatic IPEX FP32 fallback** - For CPUs without AVX512/FP16:
+   - Automatically detects unsupported instructions
+   - Falls back to FP32 IPEX optimization
+   - Still provides 2-4x speedup, just uses more memory
 
 ### Cache Details
 
 - **Location**: `~/.cache/qwen3_fast_loader/` (or custom with `--cache-dir`)
-- **Size**: ~80GB for pickle cache (2x model size due to Python object overhead)
-- **Format**: Pickled PyTorch model (maintains exact state but requires ~120GB RAM to deserialize)
-- **Compatibility**: Works with CPU and GPU modes
+- **Size**: ~40GB (torch format, half the size of old pickle cache)
+- **Format**: PyTorch state dict with memory mapping support
+- **Loading Time**: 1-2 minutes (vs 10-15 minutes with pickle)
+- **Memory Usage**: Efficient with mmap, minimal swap thrashing
 
-⚠️ **Known Issue**: Pickle cache loading can use ~160GB RAM temporarily. Consider using IPEX cache instead for better memory efficiency.
+### Caching Flow
+
+The cache system now has **two levels** for maximum resilience:
+
+1. **First Run (No Cache)**:
+   - Loads model from HuggingFace (checkpoint shards) - 30-60 minutes
+   - **Saves raw checkpoint** immediately (NEW!) - protects against IPEX failures
+   - Applies IPEX optimization (if CPU mode) - 15-30 minutes
+   - Saves IPEX-optimized model to final cache
+
+2. **Subsequent Runs (With IPEX Cache)**:
+   - Loads directly from IPEX cache with memory mapping
+   - Skips both HuggingFace loading AND IPEX optimization
+   - Ready to use in 1-2 minutes
+
+3. **Recovery Run (If IPEX failed previously)**:
+   - Loads from raw checkpoint cache (NEW!)
+   - Skips HuggingFace download (saves 30-60 minutes!)
+   - Only needs to redo IPEX optimization
+   - Saves IPEX result to final cache
+
+### Raw Checkpoint Caching (NEW in v4.0)
+
+**Problem Solved**: If IPEX optimization fails after loading checkpoint shards (30-60 min), users previously had to start over completely.
+
+**Solution**: The script now saves a raw checkpoint immediately after HuggingFace loading:
+
+```bash
+# Enable raw checkpoint caching (default: enabled)
+python qwen3_80b.py --load-strategy no-gpu --cache-raw
+
+# Disable if you want to save disk space
+python qwen3_80b.py --load-strategy no-gpu --no-cache-raw
+```
+
+**Benefits**:
+- **Resilience**: If IPEX fails, restart from checkpoint (saves 30-60 min)
+- **Disk Usage**: Additional ~40GB for raw checkpoint
+- **Automatic**: Enabled by default for CPU mode
 
 ## Intel Extension for PyTorch (IPEX) Optimization 🚀
 
@@ -337,7 +423,7 @@ The IPEX cache system now includes:
 - **Progress Indicators**: Visual feedback during optimization and saving
 - **SHA256 Checksums**: Automatic integrity verification
 - **Team Sharing**: Export/verify checksums for collaboration
-- **Cache Size**: ~80-90GB (2x larger than original 41GB model due to FP16 expansion)
+- **Cache Size**: ~40GB with torch.save format (vs 80GB with old pickle format)
 
 #### Quick Start with Integrated Caching
 
@@ -375,16 +461,17 @@ Every cached model now includes SHA256 checksum:
 - **Manual Check**: `--verify-cache` command
 - **Team Sharing**: Export/import checksums
 - **Corruption Detection**: Prevents loading corrupted files
-- **File Size**: Cache will be ~80-90GB (2x larger than original)
+- **File Size**: Cache will be ~40GB with torch.save format
 
 Example output:
 ```
-🚀 Loading IPEX-optimized model from cache...
-   🔍 Verifying file integrity...
-   ✅ Checksum verified: 3f4a2b5c8d9e1f6a...
-   📦 Cache size: 85.3GB
+🚀 Loading model from torch cache...
+   Using memory-mapped loading for efficiency...
+   Creating model structure...
+   Loading weights (memory-mapped, should be fast)...
+   Weights loaded in 30.2s
    ✅ Model loaded in 45.2s!
-   🔒 Integrity verified via SHA256 checksum
+   💾 Final memory: 45.3GB used, 80.2GB free
 ```
 
 ### What is IPEX "Repacking to CPU/XPU Format"?
@@ -402,7 +489,7 @@ The repacking occurs when `ipex.optimize()` is called after model loading. This 
 
 ### Memory Requirements During Repacking
 
-⚠️ **Important**: IPEX repacking and cache saving temporarily requires **~300GB total memory**!
+⚠️ **Important**: IPEX repacking temporarily requires **~160GB total memory** (RAM + swap)!
 
 | Phase | Memory Usage | Duration |
 |-------|--------------|----------|
@@ -672,11 +759,11 @@ python qwen3_80b.py --help
 
 ```bash
 # Automatic swap setup for IPEX (64-128GB RAM systems)
-./setup_swap.sh         # Calculates and adds needed swap
-./remove_swap.sh        # Removes swap after cache creation
+./manage_temporary_swap.sh create         # Calculates and adds needed swap
+./manage_temporary_swap.sh remove  # Remove swap after cache creation
 
 # Hardware performance benchmarking
-python benchmark_hardware.py  # Detailed system benchmark
+python scripts/benchmark_hardware.py  # Detailed system benchmark
                              # Outputs README-ready table row
                              # Saves JSON results
 

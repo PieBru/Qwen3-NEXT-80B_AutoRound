@@ -53,8 +53,13 @@ try:
 except ImportError:
     # Fallback if config.py not available
     CACHE_DIR = Path.home() / ".cache/qwen3_fast_loader"
-    CACHE_VERSION = "v3.0"
+    CACHE_VERSION = "v4.0"  # Must match config.py
     DEFAULT_MODEL_NAME = "Intel/Qwen3-Next-80B-A3B-Thinking-int4-mixed-AutoRound"
+    # Minimal memory requirements for fallback
+    MEMORY_REQUIREMENTS = {
+        "ipex_total_required": 160,
+        "ipex_additional": 115,
+    }
 
 
 def get_cache_directory(args: argparse.Namespace = None) -> Path:
@@ -198,9 +203,11 @@ class ModelCache:
             return {'ram_free': 0, 'ram_total': 0, 'ram_used': 0,
                    'swap_free': 0, 'swap_total': 0, 'swap_used': 0}
 
-    def get_cache_paths(self, model_name: str, device_type: str) -> Dict[str, Path]:
+    def get_cache_paths(self, model_name: str, device_type: str, is_raw: bool = False) -> Dict[str, Path]:
         """Get cache file paths"""
         cache_key = f"{model_name.replace('/', '_')}_{device_type}"
+        if is_raw:
+            cache_key += "_raw"  # Raw checkpoint before IPEX
         model_dir = self.cache_dir / cache_key
         model_dir.mkdir(exist_ok=True)
         return {
@@ -209,10 +216,128 @@ class ModelCache:
             'metadata': model_dir / 'metadata.json'
         }
 
-    def is_cached(self, model_name: str, device_type: str) -> bool:
+    def is_cached(self, model_name: str, device_type: str, is_raw: bool = False) -> bool:
         """Check if model is cached"""
-        paths = self.get_cache_paths(model_name, device_type)
+        paths = self.get_cache_paths(model_name, device_type, is_raw)
         return paths['model'].exists() and paths['metadata'].exists()
+
+    def save_raw_checkpoint(self, model: Any, tokenizer: Any, model_name: str, device_type: str) -> bool:
+        """Save raw checkpoint immediately after HuggingFace loading (before IPEX)"""
+        paths = self.get_cache_paths(model_name, device_type, is_raw=True)
+
+        print(f"\n💾 Saving raw checkpoint (before IPEX optimization)...")
+        print(f"   This allows quick recovery if IPEX fails")
+        print(f"   Location: {paths['model'].parent}")
+
+        start_time = time.time()
+
+        try:
+            # Save metadata
+            metadata = {
+                'model_name': model_name,
+                'device_type': device_type,
+                'cache_version': CACHE_VERSION,
+                'is_raw_checkpoint': True,
+                'timestamp': time.time(),
+                'pytorch_version': torch.__version__,
+            }
+
+            # Save metadata
+            import tempfile
+            temp_fd, temp_path = tempfile.mkstemp(dir=paths['metadata'].parent, suffix='.tmp')
+            try:
+                with os.fdopen(temp_fd, 'w') as f:
+                    json.dump(metadata, f, indent=2)
+                Path(temp_path).rename(paths['metadata'])
+            except:
+                if Path(temp_path).exists():
+                    os.unlink(temp_path)
+                raise
+
+            # Save tokenizer
+            tokenizer.save_pretrained(paths['tokenizer'])
+
+            # Save model using torch.save for efficiency
+            temp_model = paths['model'].with_suffix('.tmp')
+            torch.save({
+                'model_state_dict': model.state_dict(),
+                'model_config': model.config.to_dict() if hasattr(model, 'config') else {},
+                'is_raw_checkpoint': True
+            }, temp_model)
+            temp_model.rename(paths['model'])
+
+            save_time = time.time() - start_time
+            size_gb = paths['model'].stat().st_size / (1024**3)
+            print(f"   ✅ Raw checkpoint saved in {save_time:.1f}s")
+            print(f"   📦 Cache size: {size_gb:.1f}GB")
+            print(f"   🔄 Can resume from here if IPEX fails")
+
+            return True
+
+        except Exception as e:
+            print(f"   ⚠️  Failed to save raw checkpoint: {e}")
+            # Clean up on error
+            import shutil
+            if paths['model'].parent.exists():
+                shutil.rmtree(paths['model'].parent)
+            return False
+
+    def load_raw_checkpoint(self, model_name: str, device_type: str) -> Tuple[Optional[Any], Optional[Any]]:
+        """Load raw checkpoint (before IPEX optimization)"""
+        if not self.is_cached(model_name, device_type, is_raw=True):
+            return None, None
+
+        paths = self.get_cache_paths(model_name, device_type, is_raw=True)
+        print(f"\n📦 Loading raw checkpoint (skipping HuggingFace download)...")
+        print(f"   Cache: {paths['model'].parent}")
+
+        try:
+            # Load metadata
+            with open(paths['metadata'], 'r') as f:
+                metadata = json.load(f)
+
+            if metadata.get('cache_version') != CACHE_VERSION:
+                print(f"   ⚠️  Cache version mismatch, rebuilding...")
+                return None, None
+
+            # Load tokenizer
+            from transformers import AutoTokenizer
+            tokenizer = AutoTokenizer.from_pretrained(
+                paths['tokenizer'],
+                local_files_only=True,
+                trust_remote_code=True
+            )
+
+            # Load model with memory mapping
+            print("   Using memory-mapped loading...")
+            try:
+                checkpoint = torch.load(paths['model'], map_location='cpu', mmap=True)
+            except:
+                checkpoint = torch.load(paths['model'], map_location='cpu')
+
+            from transformers import AutoConfig, AutoModelForCausalLM
+
+            # Create model and load state
+            config = AutoConfig.from_dict(checkpoint['model_config'])
+            model = AutoModelForCausalLM.from_config(
+                config,
+                trust_remote_code=True,
+                torch_dtype=torch.float16,
+                low_cpu_mem_usage=True
+            )
+
+            print("   Loading weights...")
+            model.load_state_dict(checkpoint['model_state_dict'], strict=False)
+
+            del checkpoint
+            gc.collect()
+
+            print("   ✅ Raw checkpoint loaded! Proceeding to IPEX optimization...")
+            return model, tokenizer
+
+        except Exception as e:
+            print(f"   ❌ Failed to load raw checkpoint: {e}")
+            return None, None
 
     def save(self, model: Any, tokenizer: Any, model_name: str, device_type: str, is_ipex_optimized: bool = False) -> bool:
         """Save model to cache - handles models with hooks and IPEX optimization"""
@@ -255,6 +380,7 @@ class ModelCache:
                 'device_type': device_type,
                 'cache_version': CACHE_VERSION,
                 'is_ipex_optimized': is_ipex_optimized,
+                'is_torch_save': True,  # Flag to indicate we're using torch.save format
                 'timestamp': time.time(),
                 'pytorch_version': torch.__version__,
             }
@@ -302,29 +428,37 @@ class ModelCache:
                 print(f"   📦 Cache size: {size_gb:.1f}GB")
                 print(f"   🚀 Next load will skip repacking phase!")
             else:
-                # Try standard pickle for non-IPEX models
-                print("   Attempting to serialize model...")
+                # Always use torch.save for better memory efficiency (even for non-IPEX models)
+                print("   Saving model state with torch.save (memory efficient)...")
                 try:
-                    # Atomic save for standard model
+                    # Atomic save using torch.save for ALL models
                     temp_model = paths['model'].with_suffix('.tmp')
-                    with open(temp_model, 'wb') as f:
-                        pickle.dump(model, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+                    # Save model state dict and config (like IPEX but without the optimization)
+                    torch.save({
+                        'model_state_dict': model.state_dict(),
+                        'model_config': model.config.to_dict() if hasattr(model, 'config') else {},
+                        'is_torch_save': True  # Flag to indicate torch.save format
+                    }, temp_model)
+
                     # Atomic rename
                     temp_model.rename(paths['model'])
 
                     save_time = time.time() - start_time
                     size_gb = paths['model'].stat().st_size / (1024**3)
                     print(f"   ✅ Cache created in {save_time:.1f}s")
-                    print(f"   📦 Cache size: {size_gb:.1f}GB")
-                    print(f"   🚀 Next load will be <1 minute!")
+                    print(f"   📦 Cache size: {size_gb:.1f}GB (torch format)")
+                    print(f"   🚀 Next load will use memory mapping for speed!")
 
-                except (pickle.PicklingError, TypeError, AttributeError) as e:
-                    # Pickle failed - model has hooks or local functions
-                    print(f"   ⚠️  Standard caching not possible due to model hooks")
-                    print(f"   ℹ️  Models with CPU offloading cannot be cached")
+                except Exception as e:
+                    # If torch.save fails, model might have special hooks
+                    print(f"   ⚠️  Caching failed: {e}")
+                    print(f"   ℹ️  Models with CPU offloading may not be cacheable")
                     print(f"   💡 TIP: Use --load-strategy no-gpu for cacheable loading")
 
                     # Clean up partial files
+                    if temp_model.exists():
+                        temp_model.unlink()
                     if paths['model'].exists():
                         paths['model'].unlink()
 
@@ -378,20 +512,23 @@ class ModelCache:
                 trust_remote_code=True
             )
 
-            # Step 3-5: Load model - check if IPEX-optimized
-            if metadata.get('is_ipex_optimized', False):
-                # IPEX-optimized model loading
-                print("   Loading IPEX model from cache...")
-                print("   ⚠️  This 80-90GB cache requires careful memory management")
+            # Step 3-5: Load model - check format
+            if metadata.get('is_ipex_optimized', False) or metadata.get('is_torch_save', False):
+                # Torch.save format (both IPEX and non-IPEX use this now)
+                if metadata.get('is_ipex_optimized', False):
+                    print("   Loading IPEX-optimized model from cache...")
+                else:
+                    print("   Loading model from torch cache...")
+
+                print("   Using memory-mapped loading for efficiency...")
 
                 # First, try to load with memory mapping
                 try:
-                    # Use mmap=True for more efficient memory usage
-                    print("   Using memory-mapped loading to reduce RAM usage...")
+                    # Use mmap=True for more efficient memory usage - much faster than pickle!
                     checkpoint = torch.load(paths['model'], map_location='cpu', mmap=True)
-                except:
+                except Exception as e:
                     # Fallback to regular loading if mmap fails
-                    print("   Memory-mapped loading failed, using standard loading...")
+                    print(f"   Memory mapping not available ({e}), using standard loading...")
                     checkpoint = torch.load(paths['model'], map_location='cpu')
 
                 from transformers import AutoConfig, AutoModelForCausalLM
@@ -409,8 +546,11 @@ class ModelCache:
                 )
 
                 # Load state dict with strict=False to be more flexible
-                print("   Loading weights (this may take a while)...")
+                print("   Loading weights (memory-mapped, should be fast)...")
+                load_weights_start = time.time()
                 model.load_state_dict(checkpoint['model_state_dict'], strict=False)
+                weights_time = time.time() - load_weights_start
+                print(f"   Weights loaded in {weights_time:.1f}s")
 
                 # Aggressively clean up checkpoint
                 del checkpoint['model_state_dict']
@@ -696,6 +836,109 @@ def get_offload_folder(args: argparse.Namespace) -> str:
     return tempfile.gettempdir()
 
 
+def apply_ipex_optimization(model, args):
+    """Apply IPEX optimization to a model"""
+    try:
+        import intel_extension_for_pytorch as ipex
+
+        if not args.quiet:
+            print(f"\n⚙️  Applying IPEX optimizations...")
+            print(f"   This may take several minutes for the 80B model")
+
+        # Check memory before IPEX optimization
+        import psutil
+        mem_before = psutil.Process().memory_info().rss / (1024**3)
+        swap_before = psutil.swap_memory().used / (1024**3)
+        total_before = mem_before + swap_before
+
+        # Memory requirements for IPEX
+        from config import MEMORY_REQUIREMENTS
+        IPEX_REQUIREMENT = MEMORY_REQUIREMENTS["ipex_total_required"]
+        available_ram = psutil.virtual_memory().available / (1024**3)
+        swap_free = psutil.swap_memory().free / (1024**3)
+        total_available = available_ram + swap_free
+
+        if total_available < IPEX_REQUIREMENT:
+            print(f"   ⚠️  WARNING: Only {total_available:.1f}GB available for IPEX (needs ~{IPEX_REQUIREMENT}GB)")
+            print(f"      Process may be slow (using swap) or killed (OOM)")
+
+        print(f"   Progress: ", end="", flush=True)
+
+        # Run IPEX optimization in a thread so we can show progress
+        import threading
+        ipex_done = False
+        ipex_error = None
+        optimized_model = None
+
+        def run_ipex():
+            nonlocal optimized_model, ipex_error, ipex_done
+            try:
+                # Try FP16 first if not explicitly using FP32
+                dtype = torch.float32 if args.fp32 else torch.float16
+                try:
+                    optimized_model = ipex.optimize(model, dtype=dtype)
+                except RuntimeError as e:
+                    error_msg = str(e).lower()
+                    # Check for AVX instruction set issues
+                    if ("avx_ne_convert" in error_msg or "avx512_core_fp16" in error_msg
+                        or "fp16" in error_msg or "weights_prepack" in error_msg):
+                        if not args.quiet:
+                            print("\n   ⚠️  CPU doesn't support FP16 optimizations, falling back to FP32...")
+                        # Fall back to FP32
+                        optimized_model = ipex.optimize(model, dtype=torch.float32)
+                    else:
+                        raise  # Re-raise if it's a different error
+            except Exception as e:
+                ipex_error = e
+            finally:
+                ipex_done = True
+
+        ipex_thread = threading.Thread(target=run_ipex)
+        ipex_start = time.time()
+        ipex_thread.start()
+
+        # Show progress dots while IPEX is running
+        dot_count = 0
+        while not ipex_done:
+            if not args.quiet:
+                print(".", end="", flush=True)
+                dot_count += 1
+                if dot_count % 60 == 0:  # New line every 60 dots (roughly every minute)
+                    elapsed = time.time() - ipex_start
+                    print(f" [{elapsed:.0f}s]")
+                    print("            ", end="", flush=True)  # Indent continuation
+            time.sleep(1)  # Check every second
+
+        ipex_thread.join()
+        ipex_time = time.time() - ipex_start
+
+        if ipex_error:
+            raise ipex_error
+
+        if not args.quiet:
+            print(f" done! [{ipex_time:.1f}s]")
+            # Show memory after IPEX
+            mem_after = psutil.Process().memory_info().rss / (1024**3)
+            swap_after = psutil.swap_memory().used / (1024**3)
+            print(f"   ✅ IPEX optimization complete")
+            print(f"   Memory after IPEX: {mem_after:.1f}GB RAM, {swap_after:.1f}GB swap")
+            print(f"   Expecting 2-4x inference speedup!")
+
+        return optimized_model
+
+    except ImportError:
+        if args.verbose:
+            print("\n   ℹ️  Intel Extension for PyTorch not available")
+            print("      CPU inference will work but without 2-4x speedup")
+            print(f"      Install with: pip install intel-extension-for-pytorch")
+        return model
+    except Exception as e:
+        if not args.quiet:
+            print(f"\n   ⚠️  IPEX optimization failed: {e}")
+            print(f"      Continuing without IPEX speedup")
+        return model
+
+
 def load_model(args: argparse.Namespace):
     """Load the model with specified configuration"""
     from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -727,8 +970,9 @@ def load_model(args: argparse.Namespace):
                 print("🗑️  Clearing existing cache...")
             cache.clear()
 
-        # Try loading from cache
+        # Try loading from cache (check IPEX-optimized first, then raw checkpoint)
         if not args.rebuild_cache:
+            # First try IPEX-optimized cache
             model, tokenizer = cache.load(model_name, device_type)
             if model is not None and tokenizer is not None:
                 # Check if model is already IPEX-optimized from cache metadata
@@ -810,10 +1054,33 @@ def load_model(args: argparse.Namespace):
                     print("   ✅ IPEX optimization already applied (from cache)")
                 return model, tokenizer
 
+            # If no optimized cache, try raw checkpoint (saves re-downloading from HuggingFace)
+            if args.cache_raw and device_type == "cpu":
+                model, tokenizer = cache.load_raw_checkpoint(model_name, device_type)
+                if model is not None and tokenizer is not None:
+                    # We loaded raw checkpoint, now jump directly to IPEX optimization
+                    args._loaded_from_raw = True
+                    args._cache_needs_save = True  # Need to save IPEX-optimized version
+                    args._cache_device_type = device_type
+
+                    # Apply IPEX optimization to the raw checkpoint
+                    if not args.no_ipex:
+                        model = apply_ipex_optimization(model, args)
+
+                    # Save the IPEX-optimized version to cache
+                    if args._cache_needs_save:
+                        is_ipex = not args.no_ipex
+                        cache.save(model, tokenizer, model_name, device_type, is_ipex_optimized=is_ipex)
+
+                    return model, tokenizer
+                else:
+                    args._loaded_from_raw = False
+
         # If we get here, cache miss or rebuild - will load normally and save to cache
         # Mark that we need to save to cache after loading
-        args._cache_needs_save = True
-        args._cache_device_type = device_type  # Store for later use
+        if not hasattr(args, '_loaded_from_raw') or not args._loaded_from_raw:
+            args._cache_needs_save = True
+            args._cache_device_type = device_type  # Store for later use
 
     # Get cache and system info from args if they were already computed in main()
     if hasattr(args, '_cache_info'):
@@ -1054,7 +1321,17 @@ def load_model(args: argparse.Namespace):
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
 
-    # Load model
+    # Check if we already have model from raw checkpoint
+    if hasattr(args, '_loaded_from_raw') and args._loaded_from_raw and 'model' in locals() and 'tokenizer' in locals():
+        # We already have the model from raw checkpoint, skip to IPEX optimization
+        if not args.quiet:
+            print("\n✅ Using model from raw checkpoint, skipping HuggingFace download")
+    else:
+        # Need to load model from scratch or checkpoint
+        model = None
+        tokenizer = None
+
+    # Load model if we don't have it yet
     start_time = time.time()
 
     # Re-enable warnings for model loading if verbose
@@ -1143,7 +1420,14 @@ def load_model(args: argparse.Namespace):
             **load_kwargs
         )
 
-        # Save checkpoint after shard loading (before CPU repacking)
+        # Save raw checkpoint after shard loading (before IPEX optimization)
+        if device_map == "cpu" and not args.bypass_cache and args.cache_raw:
+            # Save raw checkpoint for quick recovery
+            cache_dir = get_cache_directory(args)
+            cache = ModelCache(cache_dir)
+            cache.save_raw_checkpoint(model, tokenizer, model_name, device_map)
+
+        # Also save intermediate checkpoint if requested
         if device_map == "cpu" and not args.bypass_cache and args.use_checkpoint:
             print("\n   📍 Shard loading complete!")
             checkpoint_mgr.save_checkpoint(model, model_name, "post_shards", {
@@ -1316,9 +1600,9 @@ def load_model(args: argparse.Namespace):
                 print(f"   Available: {mem_available:.1f}GB RAM, {swap_free:.1f}GB swap")
 
                 total_available = mem_available + swap_free
-                IPEX_REQUIREMENT = 115  # Additional memory needed for IPEX optimization
-                if total_available < IPEX_REQUIREMENT:
-                    print(f"   ⚠️  WARNING: Only {total_available:.1f}GB available for IPEX (needs ~{IPEX_REQUIREMENT}GB more)")
+                IPEX_ADDITIONAL = MEMORY_REQUIREMENTS["ipex_additional"]  # Additional memory needed
+                if total_available < IPEX_ADDITIONAL:
+                    print(f"   ⚠️  WARNING: Only {total_available:.1f}GB available for IPEX (needs ~{IPEX_ADDITIONAL}GB more)")
                     print(f"      Process may be slow (using swap) or killed (OOM)")
 
                 print(f"   Progress: ", end="", flush=True)
@@ -1332,7 +1616,21 @@ def load_model(args: argparse.Namespace):
             def run_ipex():
                 nonlocal optimized_model, ipex_error, ipex_done
                 try:
-                    optimized_model = ipex.optimize(model, dtype=torch.float16 if not args.fp32 else torch.float32)
+                    # Try FP16 first if not explicitly using FP32
+                    dtype = torch.float32 if args.fp32 else torch.float16
+                    try:
+                        optimized_model = ipex.optimize(model, dtype=dtype)
+                    except RuntimeError as e:
+                        error_msg = str(e).lower()
+                        # Check for AVX instruction set issues
+                        if ("avx_ne_convert" in error_msg or "avx512_core_fp16" in error_msg
+                            or "fp16" in error_msg or "weights_prepack" in error_msg):
+                            if not args.quiet:
+                                print("\n   ⚠️  CPU doesn't support FP16 optimizations, falling back to FP32...")
+                            # Fall back to FP32
+                            optimized_model = ipex.optimize(model, dtype=torch.float32)
+                        else:
+                            raise  # Re-raise if it's a different error
                 except Exception as e:
                     ipex_error = e
                 finally:
@@ -1807,7 +2105,12 @@ def run_performance_tests(args) -> int:
     print("🚀 HARDWARE PERFORMANCE TESTING")
     print("="*60)
 
-    # Import benchmark modules
+    # Import benchmark modules from scripts directory
+    import sys
+    from pathlib import Path
+    scripts_dir = Path(__file__).parent / 'scripts'
+    sys.path.insert(0, str(scripts_dir))
+
     try:
         if args.perf_test or args.test_memory:
             from memory_benchmark import MemoryBenchmark
@@ -1829,7 +2132,7 @@ def run_performance_tests(args) -> int:
 
     except ImportError as e:
         print(f"❌ Error importing benchmark modules: {e}")
-        print("Make sure memory_benchmark.py, cpu_benchmark.py, and storage_benchmark.py are available")
+        print("The benchmark scripts should be in the scripts/ directory")
         return 1
 
     # Generate combined report
@@ -2155,6 +2458,10 @@ CHECKPOINTING (NEW!):
                         help="Create cache file and exit (useful for sharing with others)")
     parser.add_argument("--cache-output", type=str, metavar="PATH",
                         help="Output path for cache file (with --create-cache-only)")
+    parser.add_argument("--cache-raw", action="store_true", default=True,
+                        help="Cache raw checkpoint after HuggingFace loading (default: True)")
+    parser.add_argument("--no-cache-raw", action="store_false", dest="cache_raw",
+                        help="Disable raw checkpoint caching")
 
     args = parser.parse_args()
 

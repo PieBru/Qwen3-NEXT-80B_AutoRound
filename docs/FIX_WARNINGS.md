@@ -73,9 +73,14 @@ Better backend is found, please install all the following requirements to enable
 ```
 
 ### Solution:
-If using PyTorch 2.5.0:
+If using Python 3.11 or 3.12:
 ```bash
-./install_ipex_pt25.sh
+uv pip install -r setup/requirements-py311-312.txt
+```
+
+Or use the setup script:
+```bash
+./setup/setup_python311_ipex.sh
 ```
 
 This installs IPEX for 2-4x CPU speedup.
