@@ -757,10 +757,15 @@ def load_model(args: argparse.Namespace):
                     try:
                         import intel_extension_for_pytorch as ipex
                         if not args.quiet:
-                            print(f"\n🚀 Applying IPEX optimizations (not in cache)...")
+                            print(f"\n⚙️  Applying IPEX optimizations (not in cache)...")
+                            print(f"   This may take several minutes for the 80B model")
+
+                        ipex_start = time.time()
                         model = ipex.optimize(model, dtype=torch.float16 if not args.fp32 else torch.float32)
+                        ipex_elapsed = time.time() - ipex_start
+
                         if not args.quiet:
-                            print("   ✅ IPEX applied - 2-4x inference speedup!")
+                            print(f"   ✅ IPEX applied in {ipex_elapsed:.1f}s - 2-4x inference speedup!")
                     except ImportError:
                         if args.verbose:
                             print("   ℹ️  IPEX not available")
@@ -1260,8 +1265,9 @@ def load_model(args: argparse.Namespace):
             import intel_extension_for_pytorch as ipex
 
             if not args.quiet:
-                print(f"\n🚀 Applying Intel Extension for PyTorch optimizations...")
+                print(f"\n⚙️  Applying Intel Extension for PyTorch optimizations...")
                 print(f"   IPEX version: {ipex.__version__}")
+                print(f"   This may take several minutes for the 80B model")
 
                 # Show memory before IPEX
                 mem_before = psutil.Process().memory_info().rss / (1024**3)
