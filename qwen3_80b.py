@@ -135,12 +135,15 @@ class CheckpointManager:
                 print(f"\n♻️  Found {stage} checkpoint, loading...")
                 print(f"   Location: {checkpoint_path}")
 
+                start_time = time.time()
                 # weights_only=False because we're loading full checkpoint with config, not just weights
                 checkpoint_data = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
+                load_time = time.time() - start_time
 
                 # Since we only support one model, checkpoints don't expire
                 # Users can manually clear them with --clear-checkpoints if needed
-                print(f"   ✅ Checkpoint loaded successfully")
+                size_gb = checkpoint_path.stat().st_size / (1024**3)
+                print(f"   ✅ Checkpoint loaded in {load_time:.1f}s ({size_gb:.1f}GB)")
                 return checkpoint_data
 
             except Exception as e:
@@ -967,7 +970,7 @@ def apply_ipex_optimization(model, args):
                 # Show memory after IPEX
                 mem_after = psutil.Process().memory_info().rss / (1024**3)
             swap_after = psutil.swap_memory().used / (1024**3)
-            print(f"   ✅ IPEX optimization complete")
+            print(f"   ✅ IPEX optimization complete in {ipex_time:.1f}s ({ipex_time/60:.1f} minutes)")
             print(f"   Memory after IPEX: {mem_after:.1f}GB RAM, {swap_after:.1f}GB swap")
             print(f"   Expecting 2-4x inference speedup!")
 
@@ -1484,10 +1487,15 @@ def load_model(args: argparse.Namespace):
         load_kwargs["offload_folder"] = offload_folder
 
     try:
+        shard_start_time = time.time()
         model = AutoModelForCausalLM.from_pretrained(
             str(cache_path) if is_cached else model_name,
             **load_kwargs
         )
+        shard_load_time = time.time() - shard_start_time
+
+        if not args.quiet:
+            print(f"   ⏱️  Shard loading completed in {shard_load_time:.1f}s ({shard_load_time/60:.1f} minutes)")
 
         # Save raw checkpoint after shard loading (before IPEX optimization)
         if device_map == "cpu" and not args.bypass_cache and args.cache_raw:
@@ -1534,6 +1542,7 @@ def load_model(args: argparse.Namespace):
                 }
 
                 try:
+                    fallback_start = time.time()
                     model = AutoModelForCausalLM.from_pretrained(
                         str(cache_path) if is_cached else model_name,
                         dtype=torch.float16 if not args.fp32 else torch.float32,
@@ -1545,6 +1554,9 @@ def load_model(args: argparse.Namespace):
                         offload_buffers=not args.no_offload,
                         offload_folder=offload_folder
                     )
+                    fallback_time = time.time() - fallback_start
+                    if not args.quiet:
+                        print(f"   ⏱️  Model loaded in {fallback_time:.1f}s ({fallback_time/60:.1f} minutes)")
                 except:
                     # Final fallback to CPU-only
                     if not args.quiet:
@@ -1743,7 +1755,7 @@ def load_model(args: argparse.Namespace):
                 # Show memory after IPEX
                 mem_after = psutil.Process().memory_info().rss / (1024**3)
                 swap_after = psutil.swap_memory().used / (1024**3)
-                print(f"   ✅ IPEX optimization complete")
+                print(f"   ✅ IPEX optimization complete in {ipex_time:.1f}s ({ipex_time/60:.1f} minutes)")
                 print(f"   Memory after IPEX: {mem_after:.1f}GB RAM, {swap_after:.1f}GB swap")
                 print(f"   Expecting 2-4x inference speedup!")
         except ImportError as e:
