@@ -486,38 +486,32 @@ class ModelCache:
 
                 # We have enough memory, proceed with loading
                 if TQDM_AVAILABLE:
-                    # Temporarily close progress bar to print messages cleanly
+                    # Close the initial progress bar since pickle loading can't be tracked
                     pbar.close()
 
                 print(f"   ⚠️  Loading {cache_size_gb:.1f}GB pickle cache...")
                 print(f"   Available memory: {available_memory:.1f}GB (sufficient)")
                 print(f"   This may take a few minutes and use significant RAM")
+                print(f"   Loading...", end="", flush=True)
 
-                if TQDM_AVAILABLE:
-                    # Recreate progress bar for the actual loading
-                    pbar = tqdm(total=5, desc="Loading pickle cache", unit="step",
-                               bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]')
-                    pbar.update(2)  # Update to step 3 since we already did metadata and tokenizer
+                # Track loading time
+                load_start = time.time()
 
                 try:
                     with open(paths['model'], 'rb') as f:
                         model = pickle.load(f)
 
-                    if TQDM_AVAILABLE:
-                        pbar.update(1)
-                        pbar.close()  # Close the progress bar before printing
-
+                    load_elapsed = time.time() - load_start
+                    print(f" done! ({load_elapsed:.1f}s)")
                     print("   ✅ Model loaded from pickle cache!")
 
                 except MemoryError:
-                    if TQDM_AVAILABLE:
-                        pbar.close()
+                    print(" failed!")
                     print("   ❌ Out of memory while loading pickle cache!")
                     print("   Try adding more swap space or use --bypass-cache")
                     return None, None
                 except Exception as e:
-                    if TQDM_AVAILABLE:
-                        pbar.close()
+                    print(" failed!")
                     print(f"   ❌ Failed to load pickle cache: {e}")
                     return None, None
 
