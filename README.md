@@ -328,6 +328,12 @@ python qwen3_80b.py --bypass-cache --interactive
 
 # Check cache status
 python qwen3_80b.py --check
+
+# Clear intermediate checkpoints (saves disk space)
+python qwen3_80b.py --clear-checkpoints
+
+# Disable checkpoint saving/loading
+python qwen3_80b.py --no-checkpoint
 ```
 
 ### Performance Comparison
@@ -405,6 +411,21 @@ python qwen3_80b.py --load-strategy no-gpu --no-cache-raw
 - **Resilience**: If IPEX fails, restart from checkpoint (saves 30-60 min)
 - **Disk Usage**: Additional ~40GB for raw checkpoint
 - **Automatic**: Enabled by default for CPU mode
+
+### Managing Checkpoints
+
+```bash
+# Clear all saved checkpoints
+python qwen3_80b.py --clear-checkpoints
+
+# Disable checkpoint saving/loading
+python qwen3_80b.py --no-checkpoint
+
+# Enable checkpoint usage (default)
+python qwen3_80b.py --use-checkpoint
+```
+
+**Note**: Checkpoints don't expire since we only support one model. Use `--clear-checkpoints` to manually remove them if needed.
 
 ## Intel Extension for PyTorch (IPEX) Optimization 🚀
 
