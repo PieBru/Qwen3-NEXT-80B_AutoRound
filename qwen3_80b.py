@@ -566,16 +566,16 @@ class ModelCache:
 
                 # Extract just the config first
                 # Get the config from the saved dict
-            config_dict = checkpoint['model_config']
-            model_type = config_dict.get('model_type', 'qwen3_next')
+                config_dict = checkpoint['model_config']
+                model_type = config_dict.get('model_type', 'qwen3_next')
 
-            # Create config using the appropriate class
-            from transformers.models.auto.configuration_auto import CONFIG_MAPPING
-            if model_type in CONFIG_MAPPING:
-                config_class = CONFIG_MAPPING[model_type]
-                config = config_class(**config_dict)
-            else:
-                raise ValueError(f"Unknown model type: {model_type}")
+                # Create config using the appropriate class
+                from transformers.models.auto.configuration_auto import CONFIG_MAPPING
+                if model_type in CONFIG_MAPPING:
+                    config_class = CONFIG_MAPPING[model_type]
+                    config = config_class(**config_dict)
+                else:
+                    raise ValueError(f"Unknown model type: {model_type}")
 
                 # Create model with low memory usage flag
                 print("   Creating model structure...")
