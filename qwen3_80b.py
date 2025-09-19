@@ -1406,9 +1406,14 @@ def load_model(args: argparse.Namespace):
     return model, tokenizer
 
 
-def test_model_responsiveness(model: Any, tokenizer: Any, verbose: bool = False) -> bool:
+def test_model_responsiveness(model: Any, tokenizer: Any, verbose: bool = False, no_ipex: bool = False) -> bool:
     """Quick test to see if model can generate anything"""
     print("\n🔍 Testing model responsiveness...")
+
+    # Special warning for --no-ipex
+    if no_ipex:
+        print("   ⚠️  WARNING: Running without IPEX optimization!")
+        print("   The 80B model may take >60 seconds per token without IPEX")
 
     try:
         # Very simple test prompt
@@ -1458,14 +1463,19 @@ def test_model_responsiveness(model: Any, tokenizer: Any, verbose: bool = False)
                 print("   • Model is corrupted")
                 print("   • CPU is too slow (80B model needs fast CPU)")
                 print("   • Memory issues (check swap usage)")
-                print("   • Try loading from cache instead")
+                print("   • --no-ipex makes 80B model unusable on CPU!")
 
-                # Since thread is daemon, it will be killed on exit
-                # But let's try to clean up properly
+                # The generate() call is stuck in C++ code and can't be interrupted cleanly
+                # We need to force the process to exit to avoid "terminate called without an active exception"
+                print("\n   Force exiting to avoid hanging...")
+                import os
                 import sys
                 sys.stdout.flush()
                 sys.stderr.flush()
-                return False
+
+                # Use os._exit to bypass cleanup and avoid the terminate error
+                # This is harsh but necessary when C++ threads are stuck
+                os._exit(1)
 
             if error:
                 print(f"   ❌ Generation error: {error}")
@@ -2353,7 +2363,7 @@ CHECKPOINTING (NEW!):
         print("\n" + "=" * 60)
         print("Diagnostic Mode")
         print("=" * 60)
-        test_passed = test_model_responsiveness(model, tokenizer, args.verbose)
+        test_passed = test_model_responsiveness(model, tokenizer, args.verbose, args.no_ipex)
         if not test_passed:
             print("\n❌ Diagnostic test failed - model may not work properly")
             return 1
