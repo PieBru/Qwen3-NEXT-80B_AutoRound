@@ -498,6 +498,7 @@ class ModelCache:
 
                     if TQDM_AVAILABLE:
                         pbar.update(1)
+                        pbar.close()  # Close the progress bar before printing
 
                     print("   ✅ Model loaded from pickle cache!")
 
@@ -758,13 +759,7 @@ def load_model(args: argparse.Namespace):
     model_name = args.model
 
     # Banner was already shown in main() before calling this function
-
-    # Print configuration
-    if not args.quiet:
-        print("=" * 60)
-        print(f"Qwen3-Next-80B Loader v3.4 (with Fast Caching)")
-        print("https://github.com/PieBru/Qwen3-NEXT-80B_AutoRound")
-        print("=" * 60)
+    # Don't show it again here to avoid duplication
 
     # Handle fast caching (enabled by default, disable with --bypass-cache)
     if not args.bypass_cache:
@@ -789,6 +784,19 @@ def load_model(args: argparse.Namespace):
                     with open(paths['metadata'], 'r') as f:
                         metadata = json.load(f)
                         is_ipex_optimized = metadata.get('is_ipex_optimized', False)
+
+                # Warn about --no-ipex being unusable for 80B model
+                if device_type == "cpu" and args.no_ipex:
+                    print("\n" + "="*60)
+                    print("⚠️  CRITICAL WARNING: --no-ipex with 80B model on CPU")
+                    print("="*60)
+                    print("   Without IPEX optimization, this 80B model will be:")
+                    print("   • EXTREMELY slow (0.1-0.5 tokens/sec)")
+                    print("   • Practically unusable for interactive mode")
+                    print("   • May appear frozen during generation")
+                    print("\n   Strongly recommend removing --no-ipex flag!")
+                    print("="*60)
+                    time.sleep(3)  # Give user time to read the warning
 
                 # Only apply IPEX if not already optimized
                 if device_type == "cpu" and not args.no_ipex and not is_ipex_optimized:
@@ -1436,16 +1444,22 @@ def test_model_responsiveness(model: Any, tokenizer: Any, verbose: bool = False)
             thread = threading.Thread(target=generate)
             thread.daemon = True
             thread.start()
-            thread.join(30)  # 30 second timeout
+            thread.join(10)  # Reduced timeout to 10s for faster failure
 
             if thread.is_alive():
-                print("   ❌ Model is not responding (timeout after 30s)")
+                print("   ❌ Model is not responding (timeout after 10s)")
                 print("\n   ⚠️  CPU inference appears to be stuck!")
                 print("   Possible causes:")
                 print("   • Model is corrupted")
                 print("   • CPU is too slow (80B model needs fast CPU)")
                 print("   • Memory issues (check swap usage)")
                 print("   • Try loading from cache instead")
+
+                # Since thread is daemon, it will be killed on exit
+                # But let's try to clean up properly
+                import sys
+                sys.stdout.flush()
+                sys.stderr.flush()
                 return False
 
             if error:
@@ -2360,4 +2374,34 @@ CHECKPOINTING (NEW!):
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # Set up proper exit handling to avoid "terminate called without an active exception"
+    import atexit
+    import signal
+
+    def cleanup():
+        """Clean up resources before exit"""
+        sys.stdout.flush()
+        sys.stderr.flush()
+
+    atexit.register(cleanup)
+
+    # Handle SIGTERM gracefully
+    def signal_handler(signum, frame):
+        print("\n\nReceived termination signal. Exiting...")
+        cleanup()
+        sys.exit(0)
+
+    signal.signal(signal.SIGTERM, signal_handler)
+
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        print("\n\nKeyboard interrupt. Exiting...")
+        sys.exit(0)
+    except SystemExit as e:
+        sys.exit(e.code)
+    except Exception as e:
+        print(f"\nUnexpected error: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
