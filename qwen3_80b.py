@@ -111,6 +111,13 @@ class CheckpointManager:
             size_gb = checkpoint_path.stat().st_size / (1024**3)
             print(f"   ✅ Checkpoint saved in {save_time:.1f}s ({size_gb:.1f}GB)")
             print(f"   💡 Recovery available if process fails!")
+
+            # Print stage completion message
+            if stage == "post_shards":
+                print("\n   📍 Shard loading complete!")
+            elif stage == "post_repack":
+                print("\n   📍 CPU repacking complete!")
+
             return True
 
         except Exception as e:
@@ -1347,7 +1354,7 @@ def load_model(args: argparse.Namespace):
     else:
         # Need to load model from scratch or checkpoint
         model = None
-        tokenizer = None
+        # Note: tokenizer is already loaded above on line 1328
 
     # Load model if we don't have it yet
     start_time = time.time()
@@ -1447,7 +1454,6 @@ def load_model(args: argparse.Namespace):
 
         # Also save intermediate checkpoint if requested
         if device_map == "cpu" and not args.bypass_cache and args.use_checkpoint:
-            print("\n   📍 Shard loading complete!")
             checkpoint_mgr.save_checkpoint(model, model_name, "post_shards", {
                 'device_map': device_map,
                 'dtype': str(load_kwargs.get('dtype', 'float16'))
@@ -1526,7 +1532,6 @@ def load_model(args: argparse.Namespace):
 
     # Save checkpoint after full loading and repacking (CPU mode only)
     if device_map == "cpu" and not args.bypass_cache and args.use_checkpoint:
-        print("\n   📍 CPU repacking complete!")
         checkpoint_mgr.save_checkpoint(model, model_name, "post_repack", {
             'device_map': device_map,
             'dtype': str(load_kwargs.get('dtype', 'float16')),
