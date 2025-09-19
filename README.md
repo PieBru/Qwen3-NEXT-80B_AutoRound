@@ -40,7 +40,7 @@ python benchmark_hardware.py         # Detailed hardware benchmark
 
 ## Features
 
-- ✅ **Fast Caching System** (v3.4) - **Enabled by default!** Load model in <1 minute after first run (vs 30-60 minutes)
+- ✅ **Model Caching System** (v3.4) - **Enabled by default!** Avoids 30-60 minute shard loading after first run (cache loading: <1 min with RAM, 10-15 min with swap)
 - ✅ **Consumer Hardware Support** - Optimized for GPU-poor (<20GB VRAM) and low-RAM (64-128GB) systems with automatic swap management and mandatory IPEX for usable inference speeds
 - ✅ **Hardware Performance Benchmarking** - Comprehensive testing of memory bandwidth, CPU performance, and storage I/O to predict model inference speed
 - ✅ **Cache Sharing** - Create portable cache files to share with team members for faster initial loads
@@ -77,7 +77,7 @@ python qwen3_80b.py --load-strategy no-gpu --interactive
 # 4. After first run completes, remove temporary swap:
 ./remove_swap.sh  # Created by setup_swap.sh
 
-# Future runs: Super fast (<1 minute load) with just 45GB RAM!
+# Future runs: Cached loading with just 45GB RAM (fast if in RAM, slower with swap)
 python qwen3_80b.py --load-strategy no-gpu --interactive
 ```
 
@@ -92,10 +92,12 @@ python qwen3_80b.py --load-strategy no-gpu --interactive
 
 | Hardware | First Run | Future Runs | Inference Speed |
 |----------|-----------|-------------|-----------------|
-| 64GB RAM + swap | 90-120 min | <1 minute | 2-5 tokens/sec |
-| 128GB RAM | 60-90 min | <1 minute | 3-7 tokens/sec |
+| 64GB RAM + swap | 90-120 min | 10-15 min* | 2-5 tokens/sec |
+| 128GB RAM | 60-90 min | 10-15 min* | 3-7 tokens/sec |
 | With IPEX | Required! | Cached | 2-4x faster |
 | Without IPEX | Faster load | No cache | 0.5-2 tokens/sec (unusable) |
+
+\* **Cache loading times**: The 80GB cache requires ~120GB RAM to load efficiently. With less RAM, significant swap usage makes loading take 10-15+ minutes even on fast SSDs.
 
 **Bottom Line**: IPEX is NOT optional for consumer hardware - it's the difference between unusable (0.5 tok/s) and decent (3-5 tok/s) performance!
 
@@ -249,9 +251,9 @@ The INT4 quantized model requires either:
 
 See [LOADING_STRATEGIES.md](docs/LOADING_STRATEGIES.md) for complete resource matrix.
 
-## Fast Caching System 🚀 (Default for CPU Mode)
+## Model Caching System 📦 (Default for CPU Mode)
 
-**No more waiting 30-60 minutes!** Caching is now **enabled by default** for CPU-only loading - the model loads in **<1 minute** after the first run!
+**Skip the 30-60 minute shard loading!** Caching is **enabled by default** for CPU-only loading - cache loading takes **<1 minute with RAM only** or **10-15 minutes with swap**.
 
 ### ⚠️ Important: Caching Limitation
 
@@ -260,7 +262,7 @@ See [LOADING_STRATEGIES.md](docs/LOADING_STRATEGIES.md) for complete resource ma
 ### How It Works
 
 1. **First Run**: Normal loading (30-60 min) + automatic cache creation (2-3 min)
-2. **All Future Runs**: Load from cache in <1 minute! (30-50x faster)
+2. **All Future Runs**: Load from cache (RAM: <2 min, Swap: 10-15 min)
 3. **CPU-Only Required**: Use `--load-strategy no-gpu` for cacheable loading
 
 ### Quick Start for Cacheable Loading
@@ -270,7 +272,7 @@ See [LOADING_STRATEGIES.md](docs/LOADING_STRATEGIES.md) for complete resource ma
 python qwen3_80b.py --load-strategy no-gpu --interactive
 
 # First run: 30-60 minutes (creates cache)
-# Future runs: <1 minute! (uses cache)
+# Future runs: Uses cache (faster than 30-60 min initial load)
 
 # For GPU+CPU hybrid (faster inference but NO caching):
 python qwen3_80b.py --interactive  # Uses min-gpu by default
@@ -303,15 +305,17 @@ python test_cache_performance.py
 | Loading Method | Strategy | Time | Cacheable |
 |---------------|----------|------|-----------|
 | CPU-only (no cache) | `--load-strategy no-gpu` | 30-60 minutes | ✅ Yes |
-| CPU-only (with cache) | `--load-strategy no-gpu` | <1 minute | ✅ Yes |
+| CPU-only (with cache) | `--load-strategy no-gpu` | 10-15 min** | ✅ Yes |
 | Hybrid GPU+CPU | `--load-strategy min-gpu` | 30-60 minutes | ❌ No |
 | Full GPU | `--load-strategy max-gpu` | 30-60 minutes | ❌ No |
 
+\*\* **Reality check**: Cache loading with 128GB RAM typically takes 10-15 minutes due to the 80GB pickle requiring ~120GB during deserialization, forcing heavy swap usage.
+
 ### Cache Details
 
-- **Location**: `~/.cache/qwen3_fast_loader/`
-- **Size**: ~30GB (preserves 4-bit quantization)
-- **Format**: Pickled PyTorch model (maintains exact state)
+- **Location**: `~/.cache/qwen3_fast_loader/` (or custom with `--cache-dir`)
+- **Size**: ~80GB for pickle cache (2x model size due to Python object overhead)
+- **Format**: Pickled PyTorch model (maintains exact state but requires ~120GB RAM to deserialize)
 - **Compatibility**: Works with CPU and GPU modes
 
 ⚠️ **Known Issue**: Pickle cache loading can use ~160GB RAM temporarily. Consider using IPEX cache instead for better memory efficiency.
@@ -540,7 +544,7 @@ We save the model **AFTER** IPEX optimization, so you only need extra memory onc
 4. Total: ~35-65 minutes, needs 128GB RAM + 256GB swap
 
 **All Future Runs:**
-1. Load IPEX-optimized cache (<1 minute)
+1. Load IPEX-optimized cache (1-15 min depending on RAM/swap)
    - ⚠️ **WARNING**: Memory usage during loading can exceed 200GB!
    - The 80-90GB cache file + model creation = massive memory spike
    - Memory-mapped loading helps but still requires substantial RAM
@@ -635,7 +639,7 @@ python qwen3_80b.py --cache-dir /mnt/large_drive/cache --interactive
 # - Cache creation is automatic on first run
 ```
 
-The good news: **You only need the extra RAM once!** After the first run, the IPEX-optimized model loads directly from cache in <1 minute without any repacking.
+The good news: **You only need the extra RAM once!** After the first run, the IPEX-optimized model loads directly from cache without repacking (load time depends on available RAM).
 
 ## Usage
 

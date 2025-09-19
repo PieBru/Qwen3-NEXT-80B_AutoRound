@@ -350,7 +350,7 @@ class ModelCache:
             return None, None
 
         paths = self.get_cache_paths(model_name, device_type)
-        print(f"\n🚀 Loading from fast cache...")
+        print(f"\n📦 Loading from cache...")
         print(f"   Cache: {paths['model'].parent}")
 
         # Show initial memory status
@@ -476,9 +476,12 @@ class ModelCache:
             if mem_final['swap_used'] > 0.5:
                 print(f"   💿 Swap in use: {mem_final['swap_used']:.1f}GB")
 
-            if load_time < 60:
+            # Only show speedup if it's actually fast (under 2 minutes)
+            if load_time < 120:
                 speedup = 2700 / load_time  # 45 minutes avg = 2700 seconds
-                print(f"   🎉 That's {speedup:.0f}x faster than normal loading!")
+                print(f"   ⚡ That's {speedup:.0f}x faster than loading from scratch!")
+            elif load_time > 600:
+                print(f"   ⚠️  Cache loading was slow ({load_time/60:.1f} minutes) - likely due to swap usage")
 
             return model, tokenizer
 
@@ -580,7 +583,7 @@ def display_banner(quiet: bool = False) -> None:
     """Display the application banner"""
     if not quiet:
         print("=" * 60)
-        print(f"Qwen3-Next-80B Loader v3.4 (with Fast Caching)")
+        print(f"Qwen3-Next-80B Loader v3.4 (with Model Caching)")
         print("https://github.com/PieBru/Qwen3-NEXT-80B_AutoRound")
         print("=" * 60)
 
@@ -712,7 +715,7 @@ def load_model(args: argparse.Namespace):
     # Banner was already shown in main() before calling this function
     # Don't show it again here to avoid duplication
 
-    # Handle fast caching (enabled by default, disable with --bypass-cache)
+    # Handle model caching (enabled by default, disable with --bypass-cache)
     if not args.bypass_cache:
         cache_dir = get_cache_directory(args)
         cache = ModelCache(cache_dir)
@@ -2057,7 +2060,7 @@ CHECKPOINTING (NEW!):
     parser.add_argument("--cache-dir", type=str, metavar="PATH",
                         help="Custom directory for model cache (default: ~/.cache/qwen3_models)")
     parser.add_argument("--bypass-cache", action="store_true", default=False,
-                        help="Disable fast caching (always load from scratch)")
+                        help="Disable model caching (always load from scratch)")
     parser.add_argument("--rebuild-cache", action="store_true",
                         help="Rebuild cache even if it exists")
     parser.add_argument("--force-cache", action="store_true",
