@@ -472,7 +472,9 @@ class ModelCache:
 
                 if available_memory < required_memory:
                     if TQDM_AVAILABLE:
+                        pbar.clear()  # Clear the progress bar line
                         pbar.close()  # Close the progress bar
+                        print("", flush=True)  # Add newline for clean output
 
                     print(f"   ⚠️  Insufficient memory for pickle cache!")
                     print(f"   Cache size: {cache_size_gb:.1f}GB")
@@ -486,8 +488,11 @@ class ModelCache:
 
                 # We have enough memory, proceed with loading
                 if TQDM_AVAILABLE:
-                    # Close the initial progress bar since pickle loading can't be tracked
-                    pbar.close()
+                    # Clear the progress bar line and close it
+                    pbar.clear()  # Clear the progress bar line
+                    pbar.close()  # Close the progress bar
+                    # Add a newline to ensure clean output
+                    print("", flush=True)
 
                 print(f"   ⚠️  Loading {cache_size_gb:.1f}GB pickle cache...")
                 print(f"   Available memory: {available_memory:.1f}GB (sufficient)")
